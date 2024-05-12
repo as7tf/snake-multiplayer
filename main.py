@@ -56,7 +56,7 @@ class Food(Entity):
         self.body = [start_position]
 
 
-class EntityContext:
+class EntityManager:
     def __init__(self):
         self.__entities: list[Entity] = []
 
@@ -72,7 +72,7 @@ class EntityContext:
         self.__entities = entities
 
 
-class EntityResolver:
+class GameLogicManager:
     def __init__(self, rows: int, columns: int, cell_size: int) -> None:
         self.__grid_rows = rows
         self.__grid_columns = columns
@@ -108,7 +108,7 @@ class EntityResolver:
 
     def __spawn_food(self, entities: list[Entity]):
         invalid_position = True
-        
+
         while invalid_position:
             food_position = (
                 random.randint(0, self.__grid_columns - 1),
@@ -118,7 +118,10 @@ class EntityResolver:
 
             for entity in entities:
                 for segment in entity.body:
-                    if food_position[0] == segment[0] and food_position[1] == segment[1]:
+                    if (
+                        food_position[0] == segment[0]
+                        and food_position[1] == segment[1]
+                    ):
                         invalid_position = True
                         break
         entities.append(Food(food_position))
@@ -148,19 +151,19 @@ class EntityResolver:
             False
 
 
-class EntityTranslator:
+class EntityConverter:
     def __init__(self, entity_translate: dict) -> None:
         self.__entity_translate = entity_translate
 
-    def translate_packets_to_entities(self, game_packets: list[dict]) -> EntityContext:
-        context = EntityContext()
+    def translate_packets_to_entities(self, game_packets: list[dict]) -> EntityManager:
+        entity_manager = EntityManager()
 
         for entity_packet in game_packets:
             entity_class = self.__entity_translate[entity_packet["entity_type"]]
-            context.add_entity(entity_class(entity_packet["entity_id"]))
-        return context
+            entity_manager.add_entity(entity_class(entity_packet["entity_id"]))
+        return entity_manager
 
-    def translate_entities_to_packets(self, context: EntityContext):
+    def translate_entities_to_packets(self, entity_manager: EntityManager):
         game_packets = [{}]
 
         # TODO - Translate game entities to game packets
@@ -173,7 +176,7 @@ class PlayerCommands:
         pass
 
 
-class UIGrid:
+class GameRenderer:
     def __init__(self, rows: int, columns: int, cell_size: int):
         self.cell_size = cell_size
 
@@ -210,15 +213,15 @@ if "__main__" == __name__:
     snake = Snake("ducks_gonna_fly", (0, 0))
     food = Food()
 
-    game_context = EntityContext()
-    game_context.add_entity(food)
-    game_context.add_entity(snake)
+    entity_manager = EntityManager()
+    entity_manager.add_entity(food)
+    entity_manager.add_entity(snake)
 
     rows = 10
     columns = 10
     cell_size = 20
-    ui_grid = UIGrid(rows, columns, cell_size)
-    entity_resolver = EntityResolver(rows, columns, cell_size)
+    ui_grid = GameRenderer(rows, columns, cell_size)
+    gl_manager = GameLogicManager(rows, columns, cell_size)
 
     # Main loop
     running = True
@@ -244,11 +247,11 @@ if "__main__" == __name__:
         snake.move()
 
         # Resolve game logic
-        solved_entities = entity_resolver.resolve_entities(game_context.get_entities())
-        game_context.set_entities(solved_entities)
+        solved_entities = gl_manager.resolve_entities(entity_manager.get_entities())
+        entity_manager.set_entities(solved_entities)
 
         # Draw the entities
-        ui_grid.draw(game_context.get_entities())
+        ui_grid.draw(entity_manager.get_entities())
 
         pygame.display.flip()
         pygame.time.Clock().tick(6)
