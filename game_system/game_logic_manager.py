@@ -1,16 +1,20 @@
 import random
 
-from game_logic.entity import Entity
-from game_logic.entity_type import Food, Snake
+from game_entity.entity import Entity
+from game_entity.entity_type import Food, Snake
+from game_system.system import System
 
 
-class GameLogicManager:
+class GameLogicManager(System):
     def __init__(self, rows: int, columns: int, cell_size: int) -> None:
         self._grid_rows = rows
         self._grid_columns = columns
         self._cell_size = cell_size
 
-    def resolve_entities(self, entities: list[Entity]):
+    def setup(self):
+        pass
+
+    def run(self, entities: list[Entity]):
         snakes: list[Snake] = []
         foods: list[Food] = []
 

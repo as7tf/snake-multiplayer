@@ -1,4 +1,4 @@
-from game_logic.entity import Entity
+from game_entity.entity import Entity
 
 
 class EntityManager:

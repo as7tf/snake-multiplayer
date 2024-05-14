@@ -1,9 +1,10 @@
 import pygame
 
-from game_logic.entity import Entity
+from game_entity.entity import Entity
+from game_system.system import System
 
 
-class GameRenderer:
+class GameRenderer(System):
     def __init__(self, rows: int, columns: int, cell_size: int):
         self.cell_size = cell_size
 
@@ -13,10 +14,13 @@ class GameRenderer:
         self.window = pygame.display.set_mode((screen_width, screen_height))
         pygame.display.set_caption("Snake Game")
 
-    def draw(self, game_entities: list[Entity]):
+    def setup(self):
+        pass
+
+    def run(self, entities: list[Entity]):
         self.window.fill((255, 255, 255))
 
-        for entity in game_entities:
+        for entity in entities:
             draw_positions = entity.body
             for segment in draw_positions:
                 pygame.draw.rect(
@@ -29,3 +33,6 @@ class GameRenderer:
                         self.cell_size,
                     ),
                 )
+        
+        pygame.display.flip()
+        pygame.time.Clock().tick(6)
