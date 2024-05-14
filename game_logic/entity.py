@@ -5,7 +5,7 @@ class Entity:
     def __init__(self, entity_id: str, color: tuple[int, int, int]):
         if entity_id is None:
             raise ValueError("Entity id cannot be None. Enter a valid string")
-        self.__entity_id = entity_id
+        self._entity_id = entity_id
         self.color = color
         self.body: list[Point] = [Point(0, 0)]
 
@@ -13,4 +13,4 @@ class Entity:
         if not issubclass(type(value), Entity):
             raise ValueError("Entities can only be compared to other entities.")
 
-        return True if self.__entity_id == value.__entity_id else False
+        return True if self._entity_id == value._entity_id else False
