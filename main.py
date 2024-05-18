@@ -1,4 +1,4 @@
-from game_logic.game import GameLoop
+from game_logic.game_loop import GameLoop
 
 
 if "__main__" == __name__:

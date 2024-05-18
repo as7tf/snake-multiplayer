@@ -1,29 +1,34 @@
 import random
 import pygame
-from game_entity.entity_type import Food, Snake
-from game_system.game_logic_manager import GameLogicManager
-from game_system.move_system import MoveSystem
-from game_system.system import System
-from game_system.game_renderer import GameRenderer
+
+from entities.type import Food, Snake
+
+from systems.game_logic import GameLogicSystem
+from systems.movement import MovementSystem
+from systems.render import RenderSystem
 
 
 class GameLoop:
     def __init__(self, rows, columns, cell_size):
-        self._running = True
-
-
-        self.systems = [
-            MoveSystem(),
-        ]
-        # FIXME - Integrate into the systems pipeline
-        self.game_logic_manager = GameLogicManager(rows, columns, cell_size)
-
-        self.rendering_system = GameRenderer(rows, columns, cell_size)
-
         self.rows = rows
         self.columns = columns
         self.cell_size = cell_size
 
+        coordinate_space = (self.rows, self.columns, self.cell_size)
+        self.game_logic_system = GameLogicSystem(*coordinate_space)
+        self.rendering_system = RenderSystem(*coordinate_space)
+        self.movement_system = MovementSystem()
+
+        # TODO - Add UI system and execute after render system
+
+    def setup(self):
+        pygame.init()
+
+        self.movement_system.setup()
+        self.game_logic_system.setup()
+        self.rendering_system.setup()
+
+        self._running = True
 
     def run(self):
         self.setup()
@@ -41,19 +46,16 @@ class GameLoop:
 
         while self._running:
             player_command = self.process_input()
-            self.update(entities, player_command)
-            entities = self.game_logic_manager.run(entities)
+
+            if self._running == False:
+                break
+
+            self.movement_system.process_entities(entities, player_command)
+
+            entities = self.game_logic_system.process_entities(entities)
+
             self.render(entities)
         self.exit()
-
-    def setup(self):
-        pygame.init()
-        self._setup_systems()
-        self._running = True
-
-    def _setup_systems(self):
-        for system in self.systems:
-            system.setup()
 
     def process_input(self):
         for event in pygame.event.get():
@@ -74,19 +76,8 @@ class GameLoop:
                 return snake_direction
         return None
 
-    def update(self, entities, player_command):
-        if not self._running:
-            return
-
-        for system in self.systems:
-            for entity in entities:
-                system.run(entity, player_command)
-
     def render(self, entities):
-        if not self._running:
-            return
-
-        self.rendering_system.run(entities)
+        self.rendering_system.process_entities(entities)
 
     def exit(self):
         pygame.quit()

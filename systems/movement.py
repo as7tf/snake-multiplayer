@@ -1,11 +1,11 @@
-from game_entity.entity import Entity
-from game_entity.entity_type import Snake
-from game_system.system import System
-
 import numpy as np
 
+from entities.type import Snake
 
-class MoveSystem(System):
+from systems.system import System
+
+
+class MovementSystem(System):
     def setup(self):
         # ! Do not change dictionary order it is being used for checking if the
         # ! snake is doing a 180 degrees turn
@@ -16,27 +16,27 @@ class MoveSystem(System):
             "RIGHT": (1, 0),
         }
 
-    def run(self, snake: Snake, command):
-        if not isinstance(snake, Snake):
-            return
+    def process_entities(self, entities, command):
+        snakes: list[Snake] = list(filter(lambda entity: isinstance(entity, Snake), entities))
 
-        if command is not None:
-            direction = command["snake_direction"]
+        for snake in snakes:
+            if command is not None:
+                direction = command["snake_direction"]
 
-            if not self._is_opposite_direction(snake.direction, direction):
-                snake.direction = direction
-        
-        offset = self.command_translator[snake.direction]
-        offset = np.array(offset).astype(int)
+                if not self._is_opposite_direction(snake.direction, direction):
+                    snake.direction = direction
+            
+            offset = self.command_translator[snake.direction]
+            np_offset = np.array(offset).astype(int)
 
-        head = np.array(snake.body[0]).astype(int)
-        new_head = np.add(offset, head)
+            np_head = np.array(snake.head).astype(int)
+            new_head = np.add(np_offset, np_head)
 
-        snake.body.insert(0, tuple(new_head))
+            snake._body.insert(0, tuple(new_head))
 
-        # Remove last body segment if body is greater than current snake size
-        if len(snake.body) > snake.size:
-            snake.body.pop()
+            # Remove last body segment if body is greater than current snake size
+            if len(snake._body) > snake.size:
+                snake._body.pop()
 
     def _is_opposite_direction(self, current_direction, new_direction: str):
         # Get a list from the keys of command translator dictionary

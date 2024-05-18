@@ -1,10 +1,11 @@
 import pygame
 
-from game_entity.entity import Entity
-from game_system.system import System
+from entities.entity import Entity
+
+from systems.system import System
 
 
-class GameRenderer(System):
+class RenderSystem(System):
     def __init__(self, rows: int, columns: int, cell_size: int):
         self.cell_size = cell_size
 
@@ -17,11 +18,11 @@ class GameRenderer(System):
     def setup(self):
         pass
 
-    def run(self, entities: list[Entity]):
+    def process_entities(self, entities: list[Entity]):
         self.window.fill((255, 255, 255))
 
         for entity in entities:
-            draw_positions = entity.body
+            draw_positions = entity._body
             for segment in draw_positions:
                 pygame.draw.rect(
                     self.window,
