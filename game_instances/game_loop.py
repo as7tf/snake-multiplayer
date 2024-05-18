@@ -37,7 +37,9 @@ class GameLoop:
         self.setup()
 
         entities = []
-        entities.append(Snake("ducks_gonna_fly", (6, 0)))
+        snake = Snake("ducks_gonna_fly", (6, 0))
+        snake.movement_component.speed = 1
+        entities.append(snake)
         entities.append(
             Food(
                 (

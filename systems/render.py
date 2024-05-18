@@ -22,7 +22,7 @@ class RenderSystem(System):
         self.window.fill((255, 255, 255))
 
         for entity in entities:
-            draw_positions = entity._body
+            draw_positions = entity.body_component.segments
             for segment in draw_positions:
                 pygame.draw.rect(
                     self.window,
