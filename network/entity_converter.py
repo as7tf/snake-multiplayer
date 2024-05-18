@@ -1,4 +1,4 @@
-from game_logic.entity_manager import EntityManager
+from game_system.entity_manager import EntityManager
 
 
 class EntityConverter:

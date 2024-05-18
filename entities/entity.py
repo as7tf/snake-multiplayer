@@ -1,4 +1,5 @@
-from pygame.draw_py import Point
+from components.body.component import BodyComponent
+from components.movement.component import MovementComponent
 
 
 class Entity:
@@ -7,7 +8,9 @@ class Entity:
             raise ValueError("Entity id cannot be None. Enter a valid string")
         self._entity_id = entity_id
         self.color = color
-        self.body: list[Point] = [Point(0, 0)]
+
+        self.body_component = None
+        self.movement_component = None
 
     def __eq__(self, value) -> bool:
         if not issubclass(type(value), Entity):
