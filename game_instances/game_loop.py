@@ -5,6 +5,7 @@ from entities.type import Food, Snake
 
 from systems.game_logic import GameLogicSystem
 from systems.movement import MovementSystem
+from systems.player_input import InputSystem
 from systems.render import RenderSystem
 
 
@@ -18,12 +19,14 @@ class GameLoop:
         self.game_logic_system = GameLogicSystem(*coordinate_space)
         self.rendering_system = RenderSystem(*coordinate_space)
         self.movement_system = MovementSystem()
+        self.input_system = InputSystem()
 
         # TODO - Add UI system and execute after render system
 
     def setup(self):
         pygame.init()
 
+        self.input_system.setup()
         self.movement_system.setup()
         self.game_logic_system.setup()
         self.rendering_system.setup()
@@ -45,41 +48,27 @@ class GameLoop:
         )
 
         while self._running:
-            player_command = self.process_input()
+            # TODO - Make input specific for the player's snake
+            player_command, quit_game = self.input_system.run()  # Client side
 
-            if self._running == False:
+            if quit_game == True:  # Client side
+                self._running = False
                 break
 
-            self.movement_system.process_entities(entities, player_command)
+            # TODO - Add network layer for client-server communication
+            # TODO - Create different game instances for the server and the client
 
-            entities = self.game_logic_system.process_entities(entities)
+            self.movement_system.run(entities, player_command)  # Server side
 
-            self.render(entities)
-        self.exit()
+            entities = self.game_logic_system.run(entities)  # Server side
 
-    def process_input(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self._running = False
-            elif event.type == pygame.KEYDOWN:
-                snake_direction = {"snake_direction": None}
-                if event.key == pygame.K_UP:
-                    snake_direction = {"snake_direction": "UP"}
-                elif event.key == pygame.K_DOWN:
-                    snake_direction = {"snake_direction": "DOWN"}
-                elif event.key == pygame.K_LEFT:
-                    snake_direction = {"snake_direction": "LEFT"}
-                elif event.key == pygame.K_RIGHT:
-                    snake_direction = {"snake_direction": "RIGHT"}
-                elif event.key == pygame.K_ESCAPE:
-                    self._running = False
-                return snake_direction
-        return None
+            self.render(entities)  # Client side
+        self.close()
 
     def render(self, entities):
-        self.rendering_system.process_entities(entities)
+        self.rendering_system.run(entities)
 
-    def exit(self):
+    def close(self):
         pygame.quit()
 
 

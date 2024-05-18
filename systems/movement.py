@@ -16,7 +16,7 @@ class MovementSystem(System):
             "RIGHT": (1, 0),
         }
 
-    def process_entities(self, entities, command):
+    def run(self, entities, command):
         snakes: list[Snake] = list(filter(lambda entity: isinstance(entity, Snake), entities))
 
         for snake in snakes:

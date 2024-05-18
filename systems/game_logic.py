@@ -15,7 +15,7 @@ class GameLogicSystem(System):
     def setup(self):
         pass
 
-    def process_entities(self, entities: list[Entity]):
+    def run(self, entities: list[Entity]):
         snakes: list[Snake] = list(filter(lambda entity: isinstance(entity, Snake), entities))
         foods: list[Food] = list(filter(lambda entity: isinstance(entity, Food), entities))
 

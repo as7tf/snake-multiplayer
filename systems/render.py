@@ -18,7 +18,7 @@ class RenderSystem(System):
     def setup(self):
         pass
 
-    def process_entities(self, entities: list[Entity]):
+    def run(self, entities: list[Entity]):
         self.window.fill((255, 255, 255))
 
         for entity in entities:
