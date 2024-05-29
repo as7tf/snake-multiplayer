@@ -1,38 +1,119 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import multiprocessing as mp
+import queue as q
+import time
 
-from constants import GAME_PORT
+from systems.network.constants import GAME_PORT
 
 
 class GameServer:
     def __init__(self, host, port):
         self.host = host
         self.port = port
-        self.server = None
 
-        self.clients = {}
+        self._server = None
+        self._server_process = None
+        self._loop = None
+        self._executor = None
 
-    async def start(self):
-        self.server = await asyncio.start_server(
-            self.handle_client, self.host, self.port
+        self._clients = {}
+
+    #
+    #  Non-Async methods
+    #
+
+    def setup(
+        self,
+        command_q: mp.Queue,
+        clients_data: mp.Queue,
+        game_updates: mp.Queue
+    ):
+        self._server_process = mp.Process(target=self._main_server_loop, args=(command_q, clients_data, game_updates))
+        self._server_process.start()
+
+    def wait_shutdown(self, timeout: float):
+        self._server_process.join(timeout)
+
+    #
+    #  Private methods
+    #
+
+    def _main_server_loop(
+        self,
+        command_q: mp.Queue,
+        clients_data: mp.Queue,
+        game_updates: mp.Queue
+    ):
+        self._loop = asyncio.get_event_loop()
+        try:
+            self._loop.run_until_complete(self._run(command_q, clients_data, game_updates))
+        except KeyboardInterrupt:
+            for task in asyncio.all_tasks(self._loop):
+                task.cancel()
+            self._loop.run_until_complete(
+                asyncio.gather(*asyncio.all_tasks(self._loop), return_exceptions=True)
+            )
+        finally:
+            self._loop.close()
+
+    #
+    #  Internal server functions
+    #
+
+    async def _run(
+        self,
+        command_q: mp.Queue,
+        clients_data: mp.Queue,
+        game_updates: mp.Queue
+    ):
+        await self._start()
+        
+        try:
+            command = None
+            while True:
+                try:
+                    command = command_q.get_nowait()
+                except q.Empty:
+                    pass
+                if command == "stop":
+                    break
+                
+                players_data = self._get_players_data()
+                clients_data.put(players_data)
+
+                server_update = await self._async_get(game_updates)
+                await self._broadcast_update(server_update)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self._stop()
+
+    async def _start(self):
+        self._server = await asyncio.start_server(
+            self._handle_client, self.host, self.port
         )
-        addr = self.server.sockets[0].getsockname()
+        addr = self._server.sockets[0].getsockname()
         print(f"Serving on {addr}")
 
-    async def stop(self):
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-            print("Server stopped")
+        self._executor = ThreadPoolExecutor(max_workers=1)
 
-    async def handle_client(
+    async def _stop(self):
+        if self._server:
+            self._server.close()
+            await self._server.wait_closed()
+            print("Server stopped")
+        self._executor.shutdown()
+
+    async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
         addr = writer.get_extra_info("peername")
 
         client_id = self._generate_unique_id(addr[0], addr[1])[:6]
-        self.clients[client_id] = {
+        self._clients[client_id] = {
             "player_id": client_id,
             "writer": writer,
             "player_data": {},
@@ -47,27 +128,26 @@ class GameServer:
             if not data:
                 break
             player_data = json.loads(data.decode())
-            self.clients[client_id]["player_data"].update(player_data)
+            self._clients[client_id]["player_data"].update(player_data)
         print(f"Player {client_id} disconnected")
         writer.close()
-        del self.clients[client_id]
+        del self._clients[client_id]
 
-    async def broadcast_update(self, update_data):
+    async def _broadcast_update(self, update_data):
         message = json.dumps(update_data)
-        print(f"Broadcasting: {message}")
         message = message.encode()
 
         await asyncio.gather(
             *[
                 self._send_message(client["writer"], message, client_id)
-                for client_id, client in self.clients.items()
+                for client_id, client in self._clients.items()
             ]
         )
 
-    def get_players_data(self):
+    def _get_players_data(self):
         return {
             client_id: client["player_data"]
-            for client_id, client in self.clients.items()
+            for client_id, client in self._clients.items()
         }
 
     async def _send_message(self, writer, message, client_id: str):
@@ -82,38 +162,49 @@ class GameServer:
         hashed = hashlib.sha256(unique_str.encode()).hexdigest()
         return hashed
 
+    async def _async_get(self, queue: mp.Queue):
+        try:
+            return await self._loop.run_in_executor(self._executor, queue.get, True, 2)
+        except q.Empty:
+            return None
 
-async def main():
+    async def _async_put(self, queue: mp.Queue, item):
+        try:
+            await self._loop.run_in_executor(self._executor, queue.put, item, True, 2)
+        except q.Empty:
+            pass
+
+
+def main():
+    command_q = mp.Queue()
+    clients_data_q = mp.Queue()
+    game_updates_q = mp.Queue()
+
     game_server = GameServer("127.0.0.1", GAME_PORT)
-    await game_server.start()
+    game_server.setup(command_q, clients_data_q, game_updates_q)
 
     import random
 
     try:
-        while True:
-            players_data = game_server.get_players_data()
-            print(f"Players data: {players_data}")
-            server_update = random.randint(0, 100)
-            await asyncio.sleep(0.2)
-            await game_server.broadcast_update(server_update)
-    except asyncio.CancelledError:
-        print("CancelledError")
-        pass
-    finally:
-        await game_server.stop()
+        while game_server._server_process.is_alive():
+            client_data = clients_data_q.get()
+            print(f"Players data: {client_data}")
+
+            game_update = random.randint(0, 100)
+            print(f"Game update: {game_update}")
+            game_updates_q.put(game_update)
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        command_q.put("stop")
+        timeout = 5  # in seconds
+        print("Server closing...")
+        while game_server._server_process.is_alive():
+            try:
+                game_server.wait_shutdown(timeout)
+            except TimeoutError:
+                print("Waiting server shutdown...")
+                pass
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-
-    try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        for task in asyncio.all_tasks(loop):
-            task.cancel()
-        loop.run_until_complete(
-            asyncio.gather(*asyncio.all_tasks(loop), return_exceptions=True)
-        )
-    finally:
-        loop.close()
-        print("Loop closed")
+    main()
