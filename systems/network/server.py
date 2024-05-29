@@ -20,6 +20,12 @@ class GameServer:
         addr = self.server.sockets[0].getsockname()
         print(f"Serving on {addr}")
 
+    async def stop(self):
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+            print("Server stopped")
+
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
@@ -70,12 +76,6 @@ class GameServer:
             await writer.drain()
         except ConnectionResetError:
             print(f"Failed to send message to {client_id}, connection lost")
-
-    async def stop(self):
-        if self.server:
-            self.server.close()
-            await self.server.wait_closed()
-            print("Server stopped")
 
     def _generate_unique_id(self, ip, port):
         unique_str = f"{ip}:{port}"
