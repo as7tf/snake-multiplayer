@@ -9,7 +9,7 @@ import time
 from systems.network.constants import GAME_PORT
 
 
-class GameServer:
+class ServerProcess:
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -18,6 +18,7 @@ class GameServer:
         self._server_process = None
         self._loop = None
         self._executor = None
+        self.running = False
 
         self._clients = {}
 
@@ -25,14 +26,18 @@ class GameServer:
     #  Non-Async methods
     #
 
-    def setup(
+    def start(
         self,
         command_q: mp.Queue,
         clients_data: mp.Queue,
         game_updates: mp.Queue
     ):
+        self.running = True
         self._server_process = mp.Process(target=self._main_server_loop, args=(command_q, clients_data, game_updates))
         self._server_process.start()
+
+    def stop(self):
+        self.running = False
 
     def wait_shutdown(self, timeout: float):
         self._server_process.join(timeout)
@@ -73,14 +78,7 @@ class GameServer:
         
         try:
             command = None
-            while True:
-                try:
-                    command = command_q.get_nowait()
-                except q.Empty:
-                    pass
-                if command == "stop":
-                    break
-                
+            while self.running:
                 players_data = self._get_players_data()
                 clients_data.put(players_data)
 
@@ -104,8 +102,8 @@ class GameServer:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-            print("Server stopped")
         self._executor.shutdown()
+        print("Server closed")
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -180,8 +178,8 @@ def main():
     clients_data_q = mp.Queue()
     game_updates_q = mp.Queue()
 
-    game_server = GameServer("127.0.0.1", GAME_PORT)
-    game_server.setup(command_q, clients_data_q, game_updates_q)
+    game_server = ServerProcess("127.0.0.1", GAME_PORT)
+    game_server.start(command_q, clients_data_q, game_updates_q)
 
     import random
 
@@ -195,7 +193,7 @@ def main():
             game_updates_q.put(game_update)
             time.sleep(0.5)
     except KeyboardInterrupt:
-        command_q.put("stop")
+        game_server.stop()
         timeout = 5  # in seconds
         print("Server closing...")
         while game_server._server_process.is_alive():
