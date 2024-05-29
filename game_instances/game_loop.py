@@ -1,5 +1,6 @@
 import pygame
 import random
+from enum import Enum, auto
 
 from entities.type import Food, Snake
 
@@ -9,6 +10,11 @@ from systems.player_input import InputSystem
 from systems.render import RenderSystem
 from systems.network.server import ServerProcess
 from systems.network.constants import GAME_PORT
+
+
+class GameState(Enum):
+    LISTENING = auto()
+    PLAYING = auto()
 
 
 class LocalLoop:
@@ -81,9 +87,13 @@ class ServerLoop:
         self.movement_system = MovementSystem()
         self.game_server = ServerProcess(server_ip, GAME_PORT)
 
+        self._game_state = GameState.LISTENING
+
     def setup(self):
         self.movement_system.setup()
         self.game_logic_system.setup()
+        # self.game_server.start()
+        # TODO - Don't use mp.Queue in ServerLoop
 
         self._running = True
 
@@ -92,17 +102,14 @@ class ServerLoop:
 
     def run(self):
         self.setup()
+        while self._running:
+            self._run_current_state()
 
-        entities = []
-        entities.append(
-            Food(
-                (
-                    random.randint(0, self.columns - 1),
-                    random.randint(0, self.rows - 1),
-                )
-            )
-        )
+    def _run_current_state(self):
+        state_method = getattr(self, f"{self._game_state.name.lower()}")
+        state_method()
 
+    def listening(self):
         # Listening:
         #   Listen to connections
         #   Accept connections up to max players
@@ -117,23 +124,24 @@ class ServerLoop:
                 self._running = False
                 break
 
-        # Preparing:
-        #   Sync players
+    def playing(self):
+        # Playing
         #   Send initial game data
         #   Start countdown for game start
-        #   Start Playing phase
-
-        quit_game = False
-        while self._running:
-            if quit_game == True:
-                self._running = False
-                break
-
-        # Playing
         #   Send game update
         #   Get players updates
         #   On game end, go back to lobby
         #   Or start a new game automatically
+
+        entities = []
+        entities.append(
+            Food(
+                (
+                    random.randint(0, self.columns - 1),
+                    random.randint(0, self.rows - 1),
+                )
+            )
+        )
 
         quit_game = False
         while self._running:
@@ -142,7 +150,6 @@ class ServerLoop:
                 break
 
             # TODO - Add network layer for client-server communication
-            # TODO - Create different game instances for the server and the client
             player_command = "test"
 
             self.movement_system.run(entities, player_command)  # Server side
