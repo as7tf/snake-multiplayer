@@ -4,120 +4,118 @@ import hashlib
 import json
 import multiprocessing as mp
 import queue as q
-import time
+import traceback as tb
 
 from systems.network.constants import GAME_PORT
 
 
-class ServerProcess:
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
+class TCPServer:
+    def __init__(self, host_ip, host_port):
+        self._write_queue = mp.Queue(maxsize=1)
+        self._read_queue = mp.Queue(maxsize=1)
 
-        self._server = None
-        self._server_process = None
-        self._loop = None
-        self._executor = None
-        self.running = False
+        self.ip = host_ip
+        self.port = host_port
 
+        self._close_timeout = 5
+        self._server_read_timeout = 1
         self._clients = {}
 
-    #
-    #  Non-Async methods
-    #
+        self._executor = None
+        self._process = None
+        self._loop = None
 
-    def start(
-        self,
-        command_q: mp.Queue,
-        clients_data: mp.Queue,
-        game_updates: mp.Queue
-    ):
-        self.running = True
-        self._server_process = mp.Process(target=self._main_server_loop, args=(command_q, clients_data, game_updates))
-        self._server_process.start()
+        self._running = False
+
+    def start(self):
+        self._process = mp.Process(target=self._main_server_loop)
+        self._process.start()
 
     def stop(self):
-        self.running = False
+        self._running = False
 
-    def wait_shutdown(self, timeout: float):
-        self._server_process.join(timeout)
+        if self._executor:
+            self._executor.shutdown()
 
-    #
-    #  Private methods
-    #
+        tries = 0
+        while self._process.is_alive():
+            if tries > 15/self._close_timeout:
+                self._process.terminate()
+                print("Server killed")
+                break
+            try:
+                self._process.join(timeout=self._close_timeout)
+            except TimeoutError:
+                print("Waiting server shutdown...")
+            tries += 1
+        else:
+            print("Server closed gracefully")
 
-    def _main_server_loop(
-        self,
-        command_q: mp.Queue,
-        clients_data: mp.Queue,
-        game_updates: mp.Queue
-    ):
-        self._loop = asyncio.get_event_loop()
+    def read_from(self, client_id):
         try:
-            self._loop.run_until_complete(self._run(command_q, clients_data, game_updates))
+            clients_data: dict = self._read_queue.get(timeout=self._server_read_timeout)
+            return clients_data.get(client_id)
+        except q.Empty:
+            return None
+
+    def read_all(self):
+        try:
+            return self._read_queue.get(timeout=self._server_read_timeout)
+        except q.Empty:
+            return None
+
+    def send_to(self, client_id, data):
+        self._write_queue.put({client_id: data})
+
+    def send_all(self, data):
+        self._write_queue.put({"all": data})
+
+    def _main_server_loop(self):
+        self._executor = ThreadPoolExecutor(max_workers=2)
+        
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._run())
         except KeyboardInterrupt:
             for task in asyncio.all_tasks(self._loop):
                 task.cancel()
             self._loop.run_until_complete(
                 asyncio.gather(*asyncio.all_tasks(self._loop), return_exceptions=True)
             )
+        except:
+            tb.print_exc()
         finally:
             self._loop.close()
 
-    #
-    #  Internal server functions
-    #
-
-    async def _run(
-        self,
-        command_q: mp.Queue,
-        clients_data: mp.Queue,
-        game_updates: mp.Queue
-    ):
+    async def _run(self):
         await self._start()
-        
         try:
-            command = None
-            while self.running:
-                players_data = self._get_players_data()
-                clients_data.put(players_data)
-
-                server_update = await self._async_get(game_updates)
-                await self._broadcast_update(server_update)
+            while self._running:
+                # TODO - Throttle this
+                await self._put_client_data()
+                await self._handle_write_queue()
         except asyncio.CancelledError:
             pass
-        finally:
-            await self._stop()
 
     async def _start(self):
         self._server = await asyncio.start_server(
-            self._handle_client, self.host, self.port
+            self._handle_client, self.ip, self.port
         )
         addr = self._server.sockets[0].getsockname()
         print(f"Serving on {addr}")
 
-        self._executor = ThreadPoolExecutor(max_workers=1)
-
-    async def _stop(self):
-        if self._server:
-            self._server.close()
-            await self._server.wait_closed()
-        self._executor.shutdown()
-        print("Server closed")
+        self._running = True
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
         addr = writer.get_extra_info("peername")
-
         client_id = self._generate_unique_id(addr[0], addr[1])[:6]
-        self._clients[client_id] = {
-            "player_id": client_id,
-            "writer": writer,
-            "player_data": {},
-        }
+        self._clients[client_id] = {"data": None, "writer": writer}
         print(f"Connected to {client_id}")
 
+        # Connection loop
         while True:
             try:
                 data = await reader.read(100)
@@ -125,32 +123,38 @@ class ServerProcess:
                 break
             if not data:
                 break
-            player_data = json.loads(data.decode())
-            self._clients[client_id]["player_data"].update(player_data)
-        print(f"Player {client_id} disconnected")
-        writer.close()
+            self._clients[client_id]["data"] = data.decode()
+
+        # Disconnected
+        print(f"Client {client_id} disconnected")
         del self._clients[client_id]
+        writer.close()
+        await writer.wait_closed()
 
-    async def _broadcast_update(self, update_data):
-        message = json.dumps(update_data)
-        message = message.encode()
+    async def _handle_write_queue(self):
+        update: dict = await self._read_server_data()
+        if not update:
+            return
+        elif "all" in update:
+            await self._broadcast_data(update["all"])
+        else:
+            client_id, message = next(iter(update.items()))
+            await self._send_data(client_id, message)
 
+    async def _broadcast_data(self, message):
         await asyncio.gather(
-            *[
-                self._send_message(client["writer"], message, client_id)
-                for client_id, client in self._clients.items()
-            ]
+            *[self._send_data(client_id, message)for client_id in self._clients]
         )
 
-    def _get_players_data(self):
-        return {
-            client_id: client["player_data"]
-            for client_id, client in self._clients.items()
-        }
+    async def _send_data(self, client_id: str, message: str):
+        if client_id not in self._clients:
+            print(f"Client id '{client_id}' not found")
+            return
 
-    async def _send_message(self, writer, message, client_id: str):
+        writer: asyncio.StreamWriter = self._clients[client_id]["writer"]
         try:
-            writer.write(message)
+            # TODO - Add a separator between messages
+            writer.write(json.dumps(message).encode())
             await writer.drain()
         except ConnectionResetError:
             print(f"Failed to send message to {client_id}, connection lost")
@@ -160,48 +164,51 @@ class ServerProcess:
         hashed = hashlib.sha256(unique_str.encode()).hexdigest()
         return hashed
 
-    async def _async_get(self, queue: mp.Queue):
+    async def _read_server_data(self):
         try:
-            return await self._loop.run_in_executor(self._executor, queue.get, True, 2)
+            return await self._loop.run_in_executor(
+                self._executor,
+                self._write_queue.get,
+                False,
+                # self._server_read_timeout
+            )
         except q.Empty:
             return None
+    
+    async def _put_client_data(self):        
+        client_data = {
+            client_id: self._clients[client_id]["data"]
+            for client_id in self._clients
+        }
 
-    async def _async_put(self, queue: mp.Queue, item):
         try:
-            await self._loop.run_in_executor(self._executor, queue.put, item, True, 2)
-        except q.Empty:
+            await self._loop.run_in_executor(
+                self._executor,
+                self._read_queue.put,
+                client_data,
+                False,
+                # self._server_read_timeout
+            )
+        except q.Full:
             pass
 
 
 def main():
-    command_q = mp.Queue()
-    clients_data_q = mp.Queue()
-    game_updates_q = mp.Queue()
-
-    game_server = ServerProcess("127.0.0.1", GAME_PORT)
-    game_server.start(command_q, clients_data_q, game_updates_q)
+    game_server = TCPServer("127.0.0.1", GAME_PORT)
+    game_server.start()
 
     import random
 
     try:
-        while game_server._server_process.is_alive():
-            client_data = clients_data_q.get()
-            print(f"Players data: {client_data}")
+        while True:
+            clients_data = game_server.read_all()
+            print(f"Players data: {clients_data}")
 
             game_update = random.randint(0, 100)
-            print(f"Game update: {game_update}")
-            game_updates_q.put(game_update)
-            time.sleep(0.5)
+            game_server.send_all(game_update)
+            # time.sleep(10)
     except KeyboardInterrupt:
         game_server.stop()
-        timeout = 5  # in seconds
-        print("Server closing...")
-        while game_server._server_process.is_alive():
-            try:
-                game_server.wait_shutdown(timeout)
-            except TimeoutError:
-                print("Waiting server shutdown...")
-                pass
 
 
 if __name__ == "__main__":
