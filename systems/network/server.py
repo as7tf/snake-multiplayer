@@ -1,24 +1,27 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-import json
 import multiprocessing as mp
 import queue as q
+import time
 import traceback as tb
 
 from systems.network.constants import GAME_PORT
 
+from utils.timer import Timer
+
 
 class TCPServer:
-    def __init__(self, host_ip, host_port):
-        self._write_queue = mp.Queue(maxsize=1)
+    def __init__(self, host_ip, host_port, ticks_per_second=10):
+        self._write_queue = mp.Queue(maxsize=100)
         self._read_queue = mp.Queue(maxsize=1)
 
         self.ip = host_ip
         self.port = host_port
 
         self._close_timeout = 5
-        self._server_read_timeout = 1
+        self._throttle = 1 / ticks_per_second
+
         self._clients = {}
 
         self._executor = None
@@ -52,23 +55,27 @@ class TCPServer:
             print("Server closed gracefully")
 
     def read_from(self, client_id):
+        # NOTE - Game must not wait for client data
         try:
-            clients_data: dict = self._read_queue.get(timeout=self._server_read_timeout)
+            clients_data: dict = self._read_queue.get_nowait()
             return clients_data.get(client_id)
         except q.Empty:
             return None
 
     def read_all(self):
+        # NOTE - Game must not wait for client data
         try:
-            return self._read_queue.get(timeout=self._server_read_timeout)
+            return self._read_queue.get_nowait()
         except q.Empty:
             return None
 
-    def send_to(self, client_id, data):
-        self._write_queue.put({client_id: data})
+    def send_to(self, client_id, data, timeout: float = None):
+        # NOTE - Game must wait for server availability
+        self._write_queue.put({client_id: data}, timeout=timeout)
 
-    def send_all(self, data):
-        self._write_queue.put({"all": data})
+    def send_all(self, data, timeout: float = None):
+        # NOTE - Game must wait for server availability
+        self._write_queue.put({"all": data}, timeout=timeout)
 
     def _main_server_loop(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -87,25 +94,6 @@ class TCPServer:
             tb.print_exc()
         finally:
             self._loop.close()
-
-    async def _run(self):
-        await self._start()
-        try:
-            while self._running:
-                # TODO - Throttle this
-                await self._put_client_data()
-                await self._handle_write_queue()
-        except asyncio.CancelledError:
-            pass
-
-    async def _start(self):
-        self._server = await asyncio.start_server(
-            self._handle_client, self.ip, self.port
-        )
-        addr = self._server.sockets[0].getsockname()
-        print(f"Serving on {addr}")
-
-        self._running = True
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -128,18 +116,65 @@ class TCPServer:
         # Disconnected
         print(f"Client {client_id} disconnected")
         del self._clients[client_id]
-        writer.close()
-        await writer.wait_closed()
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except ConnectionResetError:
+            pass
 
-    async def _handle_write_queue(self):
-        update: dict = await self._read_server_data()
-        if not update:
-            return
-        elif "all" in update:
-            await self._broadcast_data(update["all"])
-        else:
-            client_id, message = next(iter(update.items()))
-            await self._send_data(client_id, message)
+    async def _run(self):
+        await self._start_server()
+        try:
+            while self._running:
+                start_time = asyncio.get_event_loop().time()
+
+                # Perform both operations concurrently to improve efficiency
+                client_data_task = asyncio.create_task(self._put_client_data(), name="client_data")
+                server_update_task = asyncio.create_task(self._read_server_data(), name="server_update")
+
+                done, pending = await asyncio.wait(
+                    [client_data_task, server_update_task],
+                    return_when=asyncio.ALL_COMPLETED,  # Wait for all tasks to complete
+                )
+
+                # Process completed tasks
+                for task in done:
+                    if task == client_data_task:
+                        await task  # Ensure any exceptions are raised
+                    elif task == server_update_task:
+                        server_updates = await task
+                        await self._send_server_updates(server_updates)
+                for task in pending:
+                    await task
+
+                end_time = asyncio.get_event_loop().time()
+                elapsed_time = end_time - start_time
+                sleep_time = max(0, self._throttle - elapsed_time)
+
+                await asyncio.sleep(sleep_time)
+        except asyncio.CancelledError:
+            pass
+
+    async def _start_server(self):
+        self._server = await asyncio.start_server(
+            self._handle_client, self.ip, self.port
+        )
+        addr = self._server.sockets[0].getsockname()
+        print(f"Serving on {addr}")
+
+        self._running = True
+
+    async def _send_server_updates(self, server_updates):
+        # TODO - Optimize same message sending
+        # TODO - Optimize sending multiple messages to the same client
+        for update in server_updates:
+            if not update:
+                return
+            elif "all" in update:
+                await self._broadcast_data(update["all"])
+            else:
+                client_id, message = next(iter(update.items()))
+                await self._send_data(client_id, message)
 
     async def _broadcast_data(self, message):
         await asyncio.gather(
@@ -153,8 +188,8 @@ class TCPServer:
 
         writer: asyncio.StreamWriter = self._clients[client_id]["writer"]
         try:
-            # TODO - Add a separator between messages
-            writer.write(json.dumps(message).encode())
+            message = str(message)
+            writer.write(message.encode())
             await writer.drain()
         except ConnectionResetError:
             print(f"Failed to send message to {client_id}, connection lost")
@@ -165,17 +200,20 @@ class TCPServer:
         return hashed
 
     async def _read_server_data(self):
-        try:
-            return await self._loop.run_in_executor(
-                self._executor,
-                self._write_queue.get,
-                False,
-                # self._server_read_timeout
-            )
-        except q.Empty:
-            return None
+        def get_all_queue(queue: mp.Queue):
+            data = []
+            while not queue.empty():
+                data.append(queue.get_nowait())
+            data.reverse()
+            return data
+
+        return await self._loop.run_in_executor(
+            self._executor,
+            get_all_queue,
+            self._write_queue,
+        )
     
-    async def _put_client_data(self):        
+    async def _put_client_data(self):
         client_data = {
             client_id: self._clients[client_id]["data"]
             for client_id in self._clients
@@ -184,29 +222,33 @@ class TCPServer:
         try:
             await self._loop.run_in_executor(
                 self._executor,
-                self._read_queue.put,
+                self._read_queue.put_nowait,
                 client_data,
-                False,
-                # self._server_read_timeout
             )
         except q.Full:
             pass
 
 
 def main():
-    game_server = TCPServer("127.0.0.1", GAME_PORT)
+    game_server = TCPServer("127.0.0.1", GAME_PORT, ticks_per_second=10)
     game_server.start()
+    timer = Timer()
 
     import random
 
+    server_throttle = 0.01
     try:
+        # TODO - Add a separator between messages
         while True:
+            time.sleep(server_throttle)
+            timer.reset()
             clients_data = game_server.read_all()
-            print(f"Players data: {clients_data}")
+            if clients_data:
+                print(f"Players data: {clients_data}")
 
-            game_update = random.randint(0, 100)
-            game_server.send_all(game_update)
-            # time.sleep(10)
+                game_update = random.randint(0, 100)
+                game_server.send_all(game_update)
+            print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()
 

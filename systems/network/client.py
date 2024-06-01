@@ -1,21 +1,7 @@
 import asyncio
-import time
 import json
 
-from constants import GAME_PORT
-
-
-class Timer:
-    def __init__(self):
-        self._time = time.time_ns()
-
-    def reset(self):
-        self._time = time.time_ns()
-
-    def elapsed_ms(self):
-        ret = time.time_ns() - self._time
-        ret = ret / 10e5
-        return ret
+from systems.network.constants import GAME_PORT
 
 
 class TCPClient:
@@ -110,7 +96,6 @@ async def main():
             await game_client.disconnect()
             break
         print(f"Got server data: {server_data}")
-        await asyncio.sleep(0.2)
 
 
 if __name__ == "__main__":
