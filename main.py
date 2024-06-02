@@ -1,4 +1,4 @@
-from game_instances.game_loop import LocalLoop
+from game_instances.local_loop import LocalLoop
 
 
 if "__main__" == __name__:
