@@ -13,8 +13,8 @@ from utils.timer import Timer
 
 class TCPServer:
     def __init__(self, host_ip, host_port, ticks_per_second=10):
-        self._write_queue = mp.Queue(maxsize=100)
-        self._read_queue = mp.Queue(maxsize=1)
+        self._message_queue = mp.Queue(maxsize=100)
+        self._response_queue = mp.Queue(maxsize=1)
 
         self.ip = host_ip
         self.port = host_port
@@ -57,7 +57,7 @@ class TCPServer:
     def read_from(self, client_id):
         # NOTE - Game must not wait for client data
         try:
-            clients_data: dict = self._read_queue.get_nowait()
+            clients_data: dict = self._response_queue.get_nowait()
             return clients_data.get(client_id)
         except q.Empty:
             return None
@@ -65,17 +65,17 @@ class TCPServer:
     def read_all(self):
         # NOTE - Game must not wait for client data
         try:
-            return self._read_queue.get_nowait()
+            return self._response_queue.get_nowait()
         except q.Empty:
             return None
 
     def send_to(self, client_id, data, timeout: float = None):
         # NOTE - Game must wait for server availability
-        self._write_queue.put({client_id: data}, timeout=timeout)
+        self._message_queue.put({client_id: data}, timeout=timeout)
 
     def send_all(self, data, timeout: float = None):
         # NOTE - Game must wait for server availability
-        self._write_queue.put({"all": data}, timeout=timeout)
+        self._message_queue.put({"all": data}, timeout=timeout)
 
     def _main_server_loop(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -210,9 +210,9 @@ class TCPServer:
         return await self._loop.run_in_executor(
             self._executor,
             get_all_queue,
-            self._write_queue,
+            self._message_queue,
         )
-    
+
     async def _put_client_data(self):
         client_data = {
             client_id: self._clients[client_id]["data"]
@@ -222,7 +222,7 @@ class TCPServer:
         try:
             await self._loop.run_in_executor(
                 self._executor,
-                self._read_queue.put_nowait,
+                self._response_queue.put_nowait,
                 client_data,
             )
         except q.Full:
@@ -248,7 +248,7 @@ def main():
 
                 game_update = random.randint(0, 100)
                 game_server.send_all(game_update)
-            print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
+            # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()
 
