@@ -2,12 +2,36 @@ import asyncio
 from enum import Enum, auto
 import json
 import multiprocessing as mp
-import queue as q
 import time
 import traceback as tb
-from concurrent.futures import ThreadPoolExecutor
 
 from systems.network.constants import GAME_PORT
+
+
+class DataStream:
+    def __init__(self, blocking=False):
+        self._read, self._write = mp.Pipe(duplex=False)
+        self.blocking = blocking
+
+    def write(self, data) -> bool:
+        if not self.blocking:
+            if self._read.poll():
+                return False
+            else:
+                self._write.send(data)
+                return True
+        else:
+            self._write.send(data)
+            return True
+
+    def read(self):
+        if not self.blocking:
+            if self._read.poll():
+                return self._read.recv()
+            else:
+                return None
+        else:
+            return self._read.recv()
 
 
 class TCPClient:
@@ -52,8 +76,9 @@ class _NetworkClient:
     def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
         self._tcp_conn = TCPClient(server_ip, server_port)
 
-        self._message_queue = mp.Queue(maxsize=1)
-        self._response_queue = mp.Queue(maxsize=1)
+        self._message_stream = DataStream()
+        self._response_stream = DataStream()
+
         self._internal_state = mp.Value("i", ClientState.IDLE.value)
         self._server_data = None
         self._throttle = 1 / ticks_per_second
@@ -66,7 +91,7 @@ class _NetworkClient:
             ConnectionResetError,
             ConnectionAbortedError,
             BrokenPipeError
-        )        
+        )
 
     def asyncio_run(self):
         self._loop = asyncio.get_event_loop()
@@ -84,18 +109,11 @@ class _NetworkClient:
             print("Asyncio client closed")
             self._loop.close()
 
-    def read_response_queue(self):
-        try:
-            return self._response_queue.get_nowait()
-        except q.Empty:
-            return None
+    def read_response_stream(self):
+        return self._response_stream.read()
 
-    def push_message_queue(self, data: str) -> bool:
-        try:
-            self._message_queue.put_nowait(data)
-            return True
-        except q.Full:
-            return False
+    def write_message_stream(self, data: str) -> bool:
+        return self._message_stream.write(data)
 
     def is_running(self):
         return self.state == ClientState.RUNNING
@@ -165,11 +183,9 @@ class _NetworkClient:
 
                 server_data = None
                 try:
-                    server_data = await asyncio.wait_for(self._tcp_conn.receive_message(), None)
-                    self._response_queue.put_nowait(server_data)
-                except q.Full:
                     # TODO - Add a patience to server data age
-                    pass
+                    server_data = await asyncio.wait_for(self._tcp_conn.receive_message(), None)
+                    self._response_stream.write(server_data)
                 except self._connection_lost_exception:
                     print("Connection lost")
                     self.state = ClientState.IDLE
@@ -185,11 +201,9 @@ class _NetworkClient:
                 start_time = asyncio.get_event_loop().time()
 
                 try:
-                    data = self._message_queue.get_nowait()
-                    data = json.dumps(data)
-                    await asyncio.wait_for(self._tcp_conn.send_message(data), None)
-                except q.Empty:
-                    pass
+                    data = self._message_stream.read()
+                    if data is not None:
+                        await asyncio.wait_for(self._tcp_conn.send_message(data), None)
                 except self._connection_lost_exception:
                     pass
 
@@ -245,9 +259,11 @@ class ClientControl:
         Reads the response from the server.
 
         Returns:
-            str or None: The response from the server, or None if the queue is empty.
+            str or None: The response from the server, or None if the stream is empty.
         """
-        return self._network_client.read_response_queue()
+        data = self._network_client.read_response_stream()
+        # return json.loads(data)
+        return data
 
     def send_message(self, data: str) -> bool:
         """
@@ -257,9 +273,10 @@ class ClientControl:
             data (str): The message to be sent.
 
         Returns:
-            bool: True if the message was successfully enqueued, False otherwise.
+            bool: True if the message was successfully sent, False otherwise.
         """
-        return self._network_client.push_message_queue(data)
+        data = json.dumps(data)
+        return self._network_client.write_message_stream(data)
 
     def __del__(self):
         if self._process is not None:
