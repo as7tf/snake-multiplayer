@@ -11,8 +11,9 @@ from systems.network.constants import GAME_PORT
 from utils.timer import Timer
 
 
+# TODO - Follow client design
 class TCPServer:
-    def __init__(self, host_ip, host_port, ticks_per_second=10):
+    def __init__(self, host_ip, host_port, ticks_per_second: int = 50):
         self._message_queue = mp.Queue(maxsize=100)
         self._response_queue = mp.Queue(maxsize=1)
 
@@ -214,10 +215,10 @@ class TCPServer:
         )
 
     async def _put_client_data(self):
-        client_data = {
-            client_id: self._clients[client_id]["data"]
-            for client_id in self._clients
-        }
+        client_data = {}
+        for client_id in self._clients:
+            client_data[client_id] = self._clients[client_id]["data"]
+            self._clients[client_id]["data"] = None
 
         try:
             await self._loop.run_in_executor(
@@ -230,7 +231,7 @@ class TCPServer:
 
 
 def main():
-    game_server = TCPServer("127.0.0.1", GAME_PORT, ticks_per_second=10)
+    game_server = TCPServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
     game_server.start()
     timer = Timer()
 
