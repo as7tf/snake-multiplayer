@@ -6,32 +6,7 @@ import time
 import traceback as tb
 
 from systems.network.constants import GAME_PORT
-
-
-class DataStream:
-    def __init__(self, blocking=False):
-        self._read, self._write = mp.Pipe(duplex=False)
-        self.blocking = blocking
-
-    def write(self, data) -> bool:
-        if not self.blocking:
-            if self._read.poll():
-                return False
-            else:
-                self._write.send(data)
-                return True
-        else:
-            self._write.send(data)
-            return True
-
-    def read(self):
-        if not self.blocking:
-            if self._read.poll():
-                return self._read.recv()
-            else:
-                return None
-        else:
-            return self._read.recv()
+from systems.network.data_stream import DataStream
 
 
 class TCPClient:
@@ -174,7 +149,7 @@ class _NetworkClient:
         self.state = ClientState.IDLE
 
 
-    # Client operation methods
+    # Data operation methods
     async def _get_response(self):
         while self.state != ClientState.EXITING:
             await asyncio.sleep(self._throttle)
