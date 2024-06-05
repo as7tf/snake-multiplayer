@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+import json
 import multiprocessing as mp
 import queue as q
 import time
@@ -32,7 +33,7 @@ class TCPServer:
         self._running = False
 
     def start(self):
-        self._process = mp.Process(target=self._main_server_loop)
+        self._process = mp.Process(target=self._asyncio_run)
         self._process.start()
 
     def stop(self):
@@ -78,7 +79,8 @@ class TCPServer:
         # NOTE - Game must wait for server availability
         self._message_queue.put({"all": data}, timeout=timeout)
 
-    def _main_server_loop(self):
+
+    def _asyncio_run(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
         
         self._loop = asyncio.new_event_loop()
@@ -246,9 +248,19 @@ def main():
             clients_data = game_server.read_all()
             if clients_data:
                 print(f"Players data: {clients_data}")
+                for client_id, client_data in clients_data.items():
+                    if client_data is None:
+                        continue
+                    try:
+                        client_data = json.loads(client_data)
+                    except json.JSONDecodeError:
+                        print("json decode error")
+                
+                    if "type" in client_data and client_data["type"] == "join_lobby":
+                        game_server.send_to(client_id, {"type": "joined_lobby"})
 
-                game_update = random.randint(0, 100)
-                game_server.send_all(game_update)
+                # game_update = random.randint(0, 100)
+                # game_server.send_all(game_update)
             # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()

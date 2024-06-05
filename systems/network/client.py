@@ -8,6 +8,8 @@ import traceback as tb
 from systems.network.constants import GAME_PORT
 from systems.network.data_stream import DataStream
 
+from utils.timer import Timer
+
 
 class TCPClient:
     def __init__(self, host, port):
@@ -187,13 +189,12 @@ class _NetworkClient:
                 await asyncio.sleep(sleep_time)
 
 
-class ClientControl:
+class GameClient:
     def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
         self._network_client = _NetworkClient(server_ip, server_port, ticks_per_second)
         self._process = None
 
         self._close_timeout = 5
-        self._closing_limit = 5
 
     def start(self):
         self._process = mp.Process(target=self._network_client.asyncio_run)
@@ -201,27 +202,31 @@ class ClientControl:
 
     def stop(self):
         self._network_client.state = ClientState.EXITING
-        print("Shutting down client...")
+        print(f"[{self.__class__.__name__}] Shutting down client...")
 
-        tries = 0
+        timer = Timer()
         while self._process.is_alive():
-            if tries > self._closing_limit/self._close_timeout:
+            if timer.elapsed_sec() > self._close_timeout:
                 self._process.terminate()
-                print("Client killed")
+                print(f"[{self.__class__.__name__}] Client killed")
                 break
-            try:
-                self._process.join(timeout=self._close_timeout)
-            except TimeoutError:
-                print("Waiting client shutdown...")
-            tries += 1
+            self._process.join(timeout=1)
+            if self._process.exitcode is None:
+                print(f"[{self.__class__.__name__}] Waiting client shutdown...")
         else:
-            print("Client closed gracefully")
+            print(f"[{self.__class__.__name__}] Client closed gracefully")
         self._process = None
 
-    def connect(self):
+    def connect(self, timeout_sec: float = 1):
         self._network_client.state = ClientState.CONNECTING
+        timer = Timer()
         while not self.is_running():
+            if timer.elapsed_sec() > timeout_sec:
+                self.disconnect()
+                return False
             time.sleep(0.1)
+        else:
+            return True
 
     def disconnect(self):
         self._network_client.state = ClientState.DISCONNECTING
@@ -237,7 +242,6 @@ class ClientControl:
             str or None: The response from the server, or None if the stream is empty.
         """
         data = self._network_client.read_response_stream()
-        # return json.loads(data)
         return data
 
     def send_message(self, data: str) -> bool:
@@ -251,21 +255,122 @@ class ClientControl:
             bool: True if the message was successfully sent, False otherwise.
         """
         data = json.dumps(data)
-        return self._network_client.write_message_stream(data)
+        success = self._network_client.write_message_stream(data)
+        return success
 
     def __del__(self):
         if self._process is not None:
             self.stop()
 
 
+class SnakeClient:
+    def __init__(self, game, connection_timeout_sec: float = 5):
+        self._client = None
+        self._conn_timeout = connection_timeout_sec
+        self._get_game_state = lambda: game.state
+
+    def _get_server_message(self) -> str | None:
+        # NOTE - This is the only method to get data from the server
+        # Possible outcomes:
+        #    1. Data received
+        #    2. No data received
+        #    3. Error raised
+        
+        return self._client.read_response()
+
+    def _send_client_message(self, message) -> bool:
+        # NOTE - This is the only method to send data to the server
+        # Possible outcomes:
+        #    1. Data sent
+        #    2. Error raised
+
+        self._client.send_message(message)
+
+
+    # Game connection
+    def disconnect_from_server(self) -> bool:
+        if self._client:
+            self._client.disconnect()
+            timer = Timer()
+            while timer.elapsed_sec() < self._conn_timeout:
+                if not self._client.is_running():
+                    break
+                time.sleep(0.1)
+
+            self._client.stop()
+
+    def connect_to_server(self, server_ip, server_port) -> bool:
+        self._client = GameClient(server_ip, server_port)
+        self._client.start()
+        if self._client.connect(self._conn_timeout):
+            return True
+        else:
+            return False
+
+    def try_lobby_join(self, player_name: str) -> bool:
+        self._send_client_message({"type": "join_lobby", "player_name": player_name})
+        server_message = self._get_server_message()
+        if server_message is not None:
+            print("[snake_client] Server message:", server_message)
+            if not isinstance(server_message, dict):
+                server_message = server_message.replace("'", '"')
+                print("[snake_client] New message:", server_message)
+                server_message = json.loads(server_message)
+        if not isinstance(server_message, dict):
+            print(f"[snake_client] Not dict: {server_message}")
+            return False
+        elif server_message["type"] == "joined_lobby":
+            return True
+        else:
+            print(f"[snake_client] Failed to join lobby: {server_message}")
+            return False
+
+
+    # Game lobby
+    def get_lobby_info(self) -> dict | None:
+        # NOTE - This should be ran continuously
+        # Get available colors
+        # Get other players' info
+        # Get highscores
+        # etc.
+
+        self._send_client_message({"type": "get_lobby_info"})
+        server_message = self._get_server_message()
+        if server_message:
+            return server_message
+        else:
+            return None
+
+    def choose_color(self, color: str) -> bool:
+        # NOTE - Test in server if the color is available
+        pass
+
+    def set_ready(self, ready: bool) -> bool:
+        pass
+
+    def wait_game_start(self) -> dict:
+        pass
+
+
+    # Play loop
+    def get_server_update(self) -> dict:
+        pass
+
+    def send_player_command(self) -> bool:
+        pass
+
+
 def main():
     try:
-        game_client = ClientControl("127.0.0.1", GAME_PORT, ticks_per_second=50)
+        game_client = GameClient("127.0.0.1", GAME_PORT, ticks_per_second=50)
         game_client.start()
-        game_client.connect()
+        connected = game_client.connect(5)
+        if not connected:
+            print("Could not connect to server")
+            return
 
         import random
-        directions = ["UP", "LEFT","RIGHT","DOWN"]
+        directions = ["UP", "LEFT", "RIGHT", "DOWN"]
 
         client_throttle = 0.02
 
