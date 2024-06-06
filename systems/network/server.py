@@ -1,7 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-import json
 import multiprocessing as mp
 import queue as q
 import time
@@ -239,6 +238,11 @@ def main():
 
     import random
 
+    from schemas import JoinLobbyResponse, JoinLobbyMessage
+    from systems.decoder import MessageDecoder
+
+    decoder = MessageDecoder()
+
     server_throttle = 0.01
     try:
         # TODO - Add a separator between messages
@@ -251,16 +255,11 @@ def main():
                 for client_id, client_data in clients_data.items():
                     if client_data is None:
                         continue
-                    try:
-                        client_data = json.loads(client_data)
-                    except json.JSONDecodeError:
-                        print("json decode error")
-                
-                    if "type" in client_data and client_data["type"] == "join_lobby":
-                        game_server.send_to(client_id, {"type": "joined_lobby"})
-
-                # game_update = random.randint(0, 100)
-                # game_server.send_all(game_update)
+                    player_message: JoinLobbyMessage = decoder.decode_message(client_data)
+                    if isinstance(player_message, JoinLobbyMessage):
+                        game_server.send_to(client_id, JoinLobbyResponse(status=0, message="Joined lobby").model_dump_json())
+                    else:
+                        print("Message type", type(player_message))
             # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()

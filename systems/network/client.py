@@ -5,6 +5,9 @@ import multiprocessing as mp
 import time
 import traceback as tb
 
+from systems.decoder import MessageDecoder
+from schemas import JoinLobbyMessage, JoinLobbyResponse
+
 from systems.network.constants import GAME_PORT
 from systems.network.data_stream import DataStream
 
@@ -254,7 +257,6 @@ class GameClient:
         Returns:
             bool: True if the message was successfully sent, False otherwise.
         """
-        data = json.dumps(data)
         success = self._network_client.write_message_stream(data)
         return success
 
@@ -268,6 +270,7 @@ class SnakeClient:
         self._client = None
         self._conn_timeout = connection_timeout_sec
         self._get_game_state = lambda: game.state
+        self._decoder = MessageDecoder()
 
     def _get_server_message(self) -> str | None:
         # NOTE - This is the only method to get data from the server
@@ -308,21 +311,26 @@ class SnakeClient:
             return False
 
     def try_lobby_join(self, player_name: str) -> bool:
-        self._send_client_message({"type": "join_lobby", "player_name": player_name})
+        join_lobby_msg = JoinLobbyMessage(player_name=player_name)
+        self._send_client_message(join_lobby_msg.model_dump_json())
+        time.sleep(0.2)
         server_message = self._get_server_message()
-        if server_message is not None:
-            print("[snake_client] Server message:", server_message)
-            if not isinstance(server_message, dict):
-                server_message = server_message.replace("'", '"')
-                print("[snake_client] New message:", server_message)
-                server_message = json.loads(server_message)
-        if not isinstance(server_message, dict):
-            print(f"[snake_client] Not dict: {server_message}")
+        if server_message is None:
+            print("No data received")
             return False
-        elif server_message["type"] == "joined_lobby":
-            return True
+        elif server_message == "":
+            print("Server disconnected")
+            self.disconnect_from_server()
+            return False
+
+        response = self._decoder.decode_message(server_message)
+        if isinstance(response, JoinLobbyResponse):
+            if response.status == 0:
+                return True
+            else:
+                print("Error joining lobby: ", response.message)
+                return False
         else:
-            print(f"[snake_client] Failed to join lobby: {server_message}")
             return False
 
 

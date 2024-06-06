@@ -98,9 +98,8 @@ class ClientLoop:
             self.state = ClientGameState.IDLE
             return
 
-        player_names = ["ducks_gonna_fly", "ducksgonnafly"]
         while True:
-            lobby_joined = self.client.try_lobby_join(player_names.pop(0))
+            lobby_joined = self.client.try_lobby_join("ducksgonnafly")
             if lobby_joined:
                 break
             else:
@@ -117,8 +116,8 @@ class ClientLoop:
         #   Get game countdown
 
         print("At lobby")
-        lobby_info = self.client.get_lobby_info()
-        print(lobby_info)
+        # lobby_info = self.client.get_lobby_info()
+        # print(lobby_info)
         
         # print("Lobby ready. Starting the game...")
         # self.game_state = GameState.PLAYING
