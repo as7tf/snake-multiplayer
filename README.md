@@ -11,3 +11,6 @@ This project was made using the principles of OOP and the Entity-Component-Syste
 When writing commits and naming branches, follow these conventions:
 
 https://dev.to/varbsan/a-simplified-convention-for-naming-branches-and-commits-in-git-il4
+
+### Contributers
+Toddy - Game design assistance
