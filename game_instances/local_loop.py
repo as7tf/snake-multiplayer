@@ -11,10 +11,11 @@ from systems.render import RenderSystem
 
 
 class LocalLoop:
-    def __init__(self, rows, columns, cell_size):
+    def __init__(self, rows, columns, cell_size, tick_rate=60):
         self.rows = rows
         self.columns = columns
         self.cell_size = cell_size
+        self.tick_rate = tick_rate
 
         coordinate_space = (self.rows, self.columns, self.cell_size)
         self.game_logic_system = GameLogicSystem(*coordinate_space)
@@ -32,6 +33,7 @@ class LocalLoop:
         self.game_logic_system.setup()
         self.rendering_system.setup()
 
+        self._clock = pygame.time.Clock()
         self._running = True
 
     def close(self):
@@ -66,4 +68,7 @@ class LocalLoop:
             entities = self.game_logic_system.run(entities)
 
             self.rendering_system.run(entities)
+
+            self._clock.tick(self.tick_rate)
+            
         self.close()

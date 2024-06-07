@@ -5,8 +5,9 @@ import multiprocessing as mp
 import time
 import traceback as tb
 
+from schemas.lobby import LobbyInfoResponse
 from systems.decoder import MessageDecoder
-from schemas import JoinLobbyMessage, JoinLobbyResponse
+from schemas import JoinLobbyRequest, JoinLobbyResponse, LobbyInfoRequest
 
 from systems.network.constants import GAME_PORT
 from systems.network.data_stream import DataStream
@@ -31,7 +32,7 @@ class TCPClient:
 
     async def receive_message(self):
         if self.reader:
-            data = await self.reader.read(100)
+            data = await self.reader.read(1024)
 
             if data is None:
                 return None
@@ -272,14 +273,23 @@ class SnakeClient:
         self._get_game_state = lambda: game.state
         self._decoder = MessageDecoder()
 
-    def _get_server_message(self) -> str | None:
+    def _get_server_message(self):
         # NOTE - This is the only method to get data from the server
         # Possible outcomes:
         #    1. Data received
         #    2. No data received
         #    3. Error raised
-        
-        return self._client.read_response()
+
+        server_message = self._client.read_response()
+        if server_message is None:
+            return None
+        elif server_message == "":
+            print("Server disconnected")
+            self.disconnect_from_server()
+            return None
+        else:
+            response = self._decoder.decode_message(server_message)
+            return response            
 
     def _send_client_message(self, message) -> bool:
         # NOTE - This is the only method to send data to the server
@@ -287,7 +297,7 @@ class SnakeClient:
         #    1. Data sent
         #    2. Error raised
 
-        self._client.send_message(message)
+        self._client.send_message(message.model_dump_json())
 
 
     # Game connection
@@ -311,19 +321,13 @@ class SnakeClient:
             return False
 
     def try_lobby_join(self, player_name: str) -> bool:
-        join_lobby_msg = JoinLobbyMessage(player_name=player_name)
-        self._send_client_message(join_lobby_msg.model_dump_json())
-        time.sleep(0.2)
-        server_message = self._get_server_message()
-        if server_message is None:
-            print("No data received")
-            return False
-        elif server_message == "":
-            print("Server disconnected")
-            self.disconnect_from_server()
-            return False
+        join_lobby_msg = JoinLobbyRequest(player_name=player_name)
+        self._send_client_message(join_lobby_msg)
 
-        response = self._decoder.decode_message(server_message)
+        time.sleep(0.2)
+
+        response = self._get_server_message()
+
         if isinstance(response, JoinLobbyResponse):
             if response.status == 0:
                 return True
@@ -335,17 +339,19 @@ class SnakeClient:
 
 
     # Game lobby
-    def get_lobby_info(self) -> dict | None:
+    def get_lobby_info(self):
         # NOTE - This should be ran continuously
         # Get available colors
         # Get other players' info
         # Get highscores
         # etc.
 
-        self._send_client_message({"type": "get_lobby_info"})
-        server_message = self._get_server_message()
-        if server_message:
-            return server_message
+        lobby_info_req = LobbyInfoRequest()
+        self._send_client_message(lobby_info_req)
+
+        lobby_info = self._get_server_message()
+        if isinstance(lobby_info, LobbyInfoResponse):
+            return lobby_info.model_dump_json()
         else:
             return None
 

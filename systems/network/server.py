@@ -6,6 +6,7 @@ import queue as q
 import time
 import traceback as tb
 
+from schemas.lobby import LobbyInfoRequest, LobbyInfoResponse
 from systems.network.constants import GAME_PORT
 
 from utils.timer import Timer
@@ -77,7 +78,6 @@ class TCPServer:
     def send_all(self, data, timeout: float = None):
         # NOTE - Game must wait for server availability
         self._message_queue.put({"all": data}, timeout=timeout)
-
 
     def _asyncio_run(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -238,7 +238,7 @@ def main():
 
     import random
 
-    from schemas import JoinLobbyResponse, JoinLobbyMessage
+    from schemas import JoinLobbyResponse, JoinLobbyRequest
     from systems.decoder import MessageDecoder
 
     decoder = MessageDecoder()
@@ -252,12 +252,25 @@ def main():
             clients_data = game_server.read_all()
             if clients_data:
                 print(f"Players data: {clients_data}")
-                for client_id, client_data in clients_data.items():
-                    if client_data is None:
+                player_data = {}
+
+                for player_name, player_data in clients_data.items():
+                    if player_data is None:
                         continue
-                    player_message: JoinLobbyMessage = decoder.decode_message(client_data)
-                    if isinstance(player_message, JoinLobbyMessage):
-                        game_server.send_to(client_id, JoinLobbyResponse(status=0, message="Joined lobby").model_dump_json())
+                    player_message = decoder.decode_message(player_data)
+                    if isinstance(player_message, JoinLobbyRequest):
+                        message = JoinLobbyResponse(status=0, message="Joined lobby").model_dump_json()
+                        print("Sending message to", player_name)
+                        game_server.send_to(player_name, message)
+                    elif isinstance(player_message, LobbyInfoRequest):
+                            game_server.send_to(player_name, LobbyInfoResponse(
+                                status=0,
+                                message="Here ya go!",
+                                player_names=list(clients_data.keys()),
+                                highscores=["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"],
+                                available_colors=["red", "blue", "green", "yellow", "purple"],
+                            ).model_dump_json()
+                        )
                     else:
                         print("Message type", type(player_message))
             # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")

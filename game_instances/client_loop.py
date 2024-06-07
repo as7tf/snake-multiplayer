@@ -116,8 +116,8 @@ class ClientLoop:
         #   Get game countdown
 
         print("At lobby")
-        # lobby_info = self.client.get_lobby_info()
-        # print(lobby_info)
+        lobby_info = self.client.get_lobby_info()
+        print(lobby_info)
         
         # print("Lobby ready. Starting the game...")
         # self.game_state = GameState.PLAYING

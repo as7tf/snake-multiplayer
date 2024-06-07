@@ -10,8 +10,8 @@ class RenderSystem(System):
         self.cell_size = cell_size
 
         # Set the screen size
-        screen_width = self.cell_size * rows
-        screen_height = self.cell_size * columns
+        screen_width = self.cell_size * columns
+        screen_height = self.cell_size * rows
         self.window = pygame.display.set_mode((screen_width, screen_height))
         pygame.display.set_caption("Snake Game")
 
@@ -36,4 +36,3 @@ class RenderSystem(System):
                 )
         
         pygame.display.flip()
-        pygame.time.Clock().tick(6)

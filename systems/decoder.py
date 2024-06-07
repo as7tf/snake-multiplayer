@@ -1,7 +1,7 @@
 import importlib.util
 import json
 import os
-from typing import Dict, Type
+from typing import Dict
 from pydantic import BaseModel, ValidationError
 
 from constants.message_types import MessageTypes

@@ -10,18 +10,11 @@ class DataStream:
         if not self.blocking:
             if self._read.poll():
                 return False
-            else:
-                self._write.send(data)
-                return True
-        else:
-            self._write.send(data)
-            return True
+        self._write.send(data)
+        return True
 
     def read(self):
         if not self.blocking:
-            if self._read.poll():
-                return self._read.recv()
-            else:
+            if not self._read.poll():
                 return None
-        else:
-            return self._read.recv()
+        return self._read.recv()
