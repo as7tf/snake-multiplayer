@@ -2,19 +2,16 @@ import multiprocessing as mp
 
 
 class DataStream:
-    def __init__(self, blocking=False):
+    def __init__(self):
         self._read, self._write = mp.Pipe(duplex=False)
-        self.blocking = blocking
 
-    def write(self, data) -> bool:
-        if not self.blocking:
-            if self._read.poll():
-                return False
+    def write(self, data, timeout: float = 0) -> bool:
+        if self._read.poll(timeout):
+            return False
         self._write.send(data)
         return True
 
-    def read(self):
-        if not self.blocking:
-            if not self._read.poll():
-                return None
+    def read(self, timeout: float = 0) -> str | None:
+        if not self._read.poll(timeout):
+            return None
         return self._read.recv()

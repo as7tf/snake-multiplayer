@@ -120,7 +120,6 @@ class ClientLoop:
             print("--At lobby")
             while lobby_info is None:
                 lobby_info = self.client.get_lobby_info()
-                time.sleep(0.1)
                 if lobby_info is not None:
                     break
                 print("Waiting for lobby info...")

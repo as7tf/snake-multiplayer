@@ -87,11 +87,11 @@ class _NetworkClient:
             print("Asyncio client closed")
             self._loop.close()
 
-    def read_response_stream(self):
-        return self._response_stream.read()
+    def read_response_stream(self, timeout: float = 0):
+        return self._response_stream.read(timeout)
 
-    def write_message_stream(self, data: str) -> bool:
-        return self._message_stream.write(data)
+    def write_message_stream(self, data: str, timeout: float = 0) -> bool:
+        return self._message_stream.write(data, timeout)
 
     def is_running(self):
         return self.state == ClientState.RUNNING
@@ -247,17 +247,17 @@ class GameClient:
     def is_running(self):
         return self._network_client.is_running()
 
-    def read_response(self) -> str:
+    def read_response(self, timeout: float = 0) -> str:
         """
         Reads the response from the server.
 
         Returns:
             str or None: The response from the server, or None if the stream is empty.
         """
-        data = self._network_client.read_response_stream()
+        data = self._network_client.read_response_stream(timeout)
         return data
 
-    def send_message(self, data: str) -> bool:
+    def send_message(self, data: str, timeout: float = 0) -> bool:
         """
         Sends a message to the server.
 
@@ -269,7 +269,7 @@ class GameClient:
         """
         if not isinstance(data, str):
             return False
-        success = self._network_client.write_message_stream(data)
+        success = self._network_client.write_message_stream(data, timeout)
         return success
 
     def __del__(self):
@@ -284,14 +284,14 @@ class SnakeClient:
         self._get_game_state = lambda: game.state
         self._decoder = MessageDecoder()
 
-    def _get_server_message(self) -> ServerResponse:
+    def _get_server_message(self, timeout: float = 0) -> ServerResponse:
         # NOTE - This is the only method to get data from the server
         # Possible outcomes:
         #    1. Data received
         #    2. No data received
         #    3. Error raised
 
-        server_message = self._client.read_response()
+        server_message = self._client.read_response(timeout)
         if server_message == "":
             print("Server disconnected")
             self.disconnect_from_server()
@@ -299,26 +299,27 @@ class SnakeClient:
         else:
             return server_message
 
-    def _send_client_message(self, message: BaseModel) -> bool:
+    def _send_client_message(self, message: BaseModel, timeout: float = 0) -> bool:
         # NOTE - This is the only method to send data to the server
         # Possible outcomes:
         #    1. Data sent
         #    2. Error raised
 
-        self._client.send_message(message.model_dump_json())
+        self._client.send_message(message.model_dump_json(), timeout)
 
     def _request(
-        self, request: BaseModel, response_schema: ServerResponse
+        self, request: BaseModel, response_schema: ServerResponse, timeout: float = 0
     ) -> ServerResponse:
         self._send_client_message(request)
-        time.sleep(1)  # Wait for server to respond
-        response = self._get_server_message()
+        response = self._get_server_message(timeout)
 
         if response is not None:
             response = self._decoder.decode_message(response)
             if not isinstance(response, response_schema):
                 print(f"Unexpected server message: {response}")
                 return None
+        else:
+            print("Request timed out")
         return response
 
     # Game connection
@@ -343,7 +344,7 @@ class SnakeClient:
 
     def try_lobby_join(self, player_name: str) -> bool:
         join_request = JoinLobbyRequest(player_name=player_name)
-        response = self._request(join_request, ServerResponse)
+        response = self._request(join_request, ServerResponse, timeout=0.5)
 
         if response is None:
             return False
@@ -363,7 +364,7 @@ class SnakeClient:
 
         lobby_info_req = LobbyInfoRequest()
         lobby_message: LobbyInfoResponse = self._request(
-            lobby_info_req, LobbyInfoResponse
+            lobby_info_req, LobbyInfoResponse, timeout=2
         )
         return lobby_message
 
