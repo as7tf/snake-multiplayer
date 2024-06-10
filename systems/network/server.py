@@ -14,6 +14,7 @@ from schemas import (
     LobbyInfoResponse,
     ServerResponse,
 )
+from systems.decoder import MessageDecoder
 from systems.network.constants import GAME_PORT
 from utils.timer import Timer
 
@@ -276,16 +277,70 @@ class GameServer:
         self._network_server.send_data({"all": data}, timeout=timeout)
 
 
+class SnakeServer:
+    def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
+        self._server = GameServer(server_ip, server_port, ticks_per_second)
+
+        self._decoder = MessageDecoder()
+
+    def start(self):
+        self._server.start()
+
+    def stop(self):
+        self._server.stop()
+
+    def get_player_requests(self):
+        clients_data = self._server.read_all()
+        if clients_data:
+            print(f"Players data: {clients_data}")
+            player_data = {}
+
+            for player_name, player_data in clients_data.items():
+                if player_data is None:
+                    continue
+                player_message = self._decoder.decode_message(player_data)
+                if isinstance(player_message, JoinLobbyRequest):
+                    print("Joining lobby", player_name)
+                    message = ServerResponse(
+                        status=0, message="Joined lobby"
+                    ).model_dump_json()
+                    self._server.send_to(player_name, message)
+                elif isinstance(player_message, LobbyInfoRequest):
+                    print("Sending lobby info to", player_name)
+                    self._server.send_to(
+                        player_name,
+                        LobbyInfoResponse(
+                            status=0,
+                            message="Here ya go!",
+                            player_names=list(clients_data.keys()),
+                            highscores=[
+                                "10",
+                                "9",
+                                "8",
+                                "7",
+                                "6",
+                                "5",
+                                "4",
+                                "3",
+                                "2",
+                                "1",
+                            ],
+                            available_colors=[
+                                "red",
+                                "blue",
+                                "green",
+                                "yellow",
+                                "purple",
+                            ],
+                        ).model_dump_json(),
+                    )
+                else:
+                    print("Message type", type(player_message))
+
 def main():
-    game_server = GameServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
+    game_server = SnakeServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
     game_server.start()
     timer = Timer()
-
-    import random
-
-    from systems.decoder import MessageDecoder
-
-    decoder = MessageDecoder()
 
     server_throttle = 0.01
     try:
@@ -293,52 +348,7 @@ def main():
         while True:
             time.sleep(server_throttle)
             timer.reset()
-            clients_data = game_server.read_all()
-            if clients_data:
-                print(f"Players data: {clients_data}")
-                player_data = {}
-
-                for player_name, player_data in clients_data.items():
-                    if player_data is None:
-                        continue
-                    player_message = decoder.decode_message(player_data)
-                    if isinstance(player_message, JoinLobbyRequest):
-                        print("Joining lobby", player_name)
-                        message = ServerResponse(
-                            status=0, message="Joined lobby"
-                        ).model_dump_json()
-                        game_server.send_to(player_name, message)
-                    elif isinstance(player_message, LobbyInfoRequest):
-                        print("Sending lobby info to", player_name)
-                        game_server.send_to(
-                            player_name,
-                            LobbyInfoResponse(
-                                status=0,
-                                message="Here ya go!",
-                                player_names=list(clients_data.keys()),
-                                highscores=[
-                                    "10",
-                                    "9",
-                                    "8",
-                                    "7",
-                                    "6",
-                                    "5",
-                                    "4",
-                                    "3",
-                                    "2",
-                                    "1",
-                                ],
-                                available_colors=[
-                                    "red",
-                                    "blue",
-                                    "green",
-                                    "yellow",
-                                    "purple",
-                                ],
-                            ).model_dump_json(),
-                        )
-                    else:
-                        print("Message type", type(player_message))
+            game_server.get_player_requests()
             # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()

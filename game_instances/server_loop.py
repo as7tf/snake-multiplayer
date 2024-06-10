@@ -9,11 +9,15 @@ from entities.type import Food, Snake
 
 from systems.game_logic import GameLogicSystem
 from systems.movement import MovementSystem
-from systems.network.server import TCPServer
+from systems.network.server import SnakeServer
 from systems.network.constants import GAME_PORT
-from systems.render import RenderSystem
 
-from game_instances.constants import GameState
+
+class ServerGameState(Enum):
+    IDLE = auto()
+    LOBBY = auto()
+    PLAYING = auto()
+    EXITING = auto()
 
 
 class ServerLoop:
@@ -26,11 +30,12 @@ class ServerLoop:
         self.game_logic_system = GameLogicSystem(*coordinate_space)
         self.movement_system = MovementSystem()
         # self.rendering_system = RenderSystem(*coordinate_space)
-        self.server = TCPServer(server_ip, GAME_PORT)
+        self.server = SnakeServer(server_ip, GAME_PORT)
 
-        self.game_state = None
+        self.state = ServerGameState.IDLE
         self.clock = pygame.time.Clock()
         self.players = []
+
 
     def setup(self):
         pygame.init()
@@ -40,22 +45,21 @@ class ServerLoop:
         # self.rendering_system.setup()
         self.server.start()
 
-        self.game_state = GameState.LOBBY
+        self.state = ServerGameState.LOBBY
         self._running = True
 
     def close(self):
-        self._running = False
+        self.state = ServerGameState.EXITING
         self.server.stop()
         pygame.quit()
 
     def run(self):
         self.setup()
         while self._running:
-            self._run_current_state()
-
-    def _run_current_state(self):
-        state_method = getattr(self, f"{self.game_state.name.lower()}")
-        state_method()
+            if self.state == ServerGameState.LOBBY:
+                self.lobby()
+            elif self.state == ServerGameState.PLAYING:
+                self.playing()
 
     def lobby(self):
         # Listening:
@@ -94,7 +98,7 @@ class ServerLoop:
                 return
         
         print("Lobby ready. Starting the game...")
-        self.game_state = GameState.PLAYING
+        self.state = ServerGameState.PLAYING
 
     def playing(self):
         # Playing
@@ -157,7 +161,7 @@ class ServerLoop:
             self.clock.tick(10)
 
         # Game goes back to lobby
-        self.game_state = GameState.LOBBY
+        self.state = ServerGameState.LOBBY
 
 
 if __name__ == "__main__":
