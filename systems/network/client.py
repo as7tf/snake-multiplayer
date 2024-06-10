@@ -1,7 +1,7 @@
 import asyncio
 from enum import Enum, auto
-import json
 import multiprocessing as mp
+import struct
 import time
 import traceback as tb
 
@@ -25,19 +25,12 @@ class TCPClient:
     async def connect(self):
         self.reader, self.writer = await asyncio.open_connection(self.host, self.port)
 
-    async def send_message(self, message: str):
-        if self.writer:
-            self.writer.write(message.encode())
-            await self.writer.drain()
+    async def send_message(self, message: bytes):
+        self.writer.write(message)
+        await self.writer.drain()
 
-    async def receive_message(self):
-        if self.reader:
-            data = await self.reader.read(1024)
-
-            if data is None:
-                return None
-            message = data.decode()
-            return message
+    async def receive_message(self, num_bytes: int = 1024):
+        return await self.reader.read(num_bytes)
 
     async def disconnect(self):
         if self.writer:
@@ -106,7 +99,7 @@ class _NetworkClient:
     @state.setter
     def state(self, state: ClientState):
         if not isinstance(state, ClientState):
-            raise ValueError(f"Client state must be of type {ClientState}")
+            raise ValueError(f"Client state must be of type {ClientState.__name__}")
         elif self.state == ClientState.EXITING:
             return
         with self._internal_state.get_lock():
@@ -165,8 +158,13 @@ class _NetworkClient:
                 server_data = None
                 try:
                     # TODO - Add a patience to server data age
-                    server_data = await asyncio.wait_for(self._tcp_conn.receive_message(), None)
-                    self._response_stream.write(server_data)
+                    prefix_length = await asyncio.wait_for(self._tcp_conn.receive_message(4), None)
+                    if prefix_length is not None and len(prefix_length) == 4:
+                        message_length = struct.unpack('!I', prefix_length)[0]
+                        server_data = await asyncio.wait_for(self._tcp_conn.receive_message(message_length), None)
+
+                        server_data = server_data.decode("utf-8")
+                        self._response_stream.write(server_data)
                 except self._connection_lost_exception:
                     print("Connection lost")
                     self.state = ClientState.IDLE
@@ -182,8 +180,15 @@ class _NetworkClient:
                 start_time = asyncio.get_event_loop().time()
 
                 try:
-                    data = self._message_stream.read()
+                    data: str = self._message_stream.read()
                     if data is not None:
+                        data = data.encode("utf-8")
+
+                        # Create the length prefix
+                        message_length = len(data)
+                        length_prefix = struct.pack('!I', message_length)
+                        data = length_prefix + data
+
                         await asyncio.wait_for(self._tcp_conn.send_message(data), None)
                 except self._connection_lost_exception:
                     pass
@@ -258,6 +263,8 @@ class GameClient:
         Returns:
             bool: True if the message was successfully sent, False otherwise.
         """
+        if not isinstance(data, str):
+            return False
         success = self._network_client.write_message_stream(data)
         return success
 

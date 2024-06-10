@@ -1,8 +1,10 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum, auto
 import hashlib
 import multiprocessing as mp
 import queue as q
+import struct
 import time
 import traceback as tb
 
@@ -10,6 +12,12 @@ from schemas.lobby import LobbyInfoRequest, LobbyInfoResponse
 from systems.network.constants import GAME_PORT
 
 from utils.timer import Timer
+
+
+class ServerState(Enum):
+    IDLE = auto()
+    RUNNING = auto()
+    EXITING = auto()
 
 
 # TODO - Follow client design
@@ -21,6 +29,7 @@ class TCPServer:
         self.ip = host_ip
         self.port = host_port
 
+        self._internal_state = mp.Value("i", ServerState.IDLE.value)
         self._close_timeout = 5
         self._throttle = 1 / ticks_per_second
 
@@ -30,56 +39,16 @@ class TCPServer:
         self._process = None
         self._loop = None
 
-        self._running = False
+    def send_data(self, data: str, timeout: float = None):
+        self._message_queue.put(data, timeout=timeout)
 
-    def start(self):
-        self._process = mp.Process(target=self._asyncio_run)
-        self._process.start()
-
-    def stop(self):
-        self._running = False
-
-        if self._executor:
-            self._executor.shutdown()
-
-        tries = 0
-        while self._process.is_alive():
-            if tries > 15/self._close_timeout:
-                self._process.terminate()
-                print("Server killed")
-                break
-            try:
-                self._process.join(timeout=self._close_timeout)
-            except TimeoutError:
-                print("Waiting server shutdown...")
-            tries += 1
-        else:
-            print("Server closed gracefully")
-
-    def read_from(self, client_id):
-        # NOTE - Game must not wait for client data
+    def read_data(self, timeout: float = None):
         try:
-            clients_data: dict = self._response_queue.get_nowait()
-            return clients_data.get(client_id)
+            return self._response_queue.get(timeout=timeout)
         except q.Empty:
             return None
 
-    def read_all(self):
-        # NOTE - Game must not wait for client data
-        try:
-            return self._response_queue.get_nowait()
-        except q.Empty:
-            return None
-
-    def send_to(self, client_id, data, timeout: float = None):
-        # NOTE - Game must wait for server availability
-        self._message_queue.put({client_id: data}, timeout=timeout)
-
-    def send_all(self, data, timeout: float = None):
-        # NOTE - Game must wait for server availability
-        self._message_queue.put({"all": data}, timeout=timeout)
-
-    def _asyncio_run(self):
+    def asyncio_run(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
         
         self._loop = asyncio.new_event_loop()
@@ -97,6 +66,19 @@ class TCPServer:
         finally:
             self._loop.close()
 
+    @property
+    def state(self):
+        return ServerState(self._internal_state.value)
+
+    @state.setter
+    def state(self, state: ServerState):
+        if not isinstance(state, ServerState):
+            raise ValueError(f"Server state must be of type {ServerState.__name__}")
+        elif self.state == ServerState.EXITING:
+            return
+        with self._internal_state.get_lock():
+            self._internal_state.value = state.value
+
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
@@ -106,12 +88,15 @@ class TCPServer:
         print(f"Connected to {client_id}")
 
         # Connection loop
-        while True:
+        while self.state == ServerState.RUNNING:
             try:
-                data = await reader.read(100)
+                prefix_length = await reader.read(4)
+                if prefix_length is not None and len(prefix_length) == 4:
+                    message_length = struct.unpack('!I', prefix_length)[0]
+                    data = await reader.read(message_length)
             except ConnectionResetError:
                 break
-            if not data:
+            if not prefix_length or not data:
                 break
             self._clients[client_id]["data"] = data.decode()
 
@@ -126,8 +111,9 @@ class TCPServer:
 
     async def _run(self):
         await self._start_server()
+        self.state = ServerState.RUNNING
         try:
-            while self._running:
+            while self.state != ServerState.EXITING:
                 start_time = asyncio.get_event_loop().time()
 
                 # Perform both operations concurrently to improve efficiency
@@ -164,7 +150,7 @@ class TCPServer:
         addr = self._server.sockets[0].getsockname()
         print(f"Serving on {addr}")
 
-        self._running = True
+        self.state = ServerState.RUNNING
 
     async def _send_server_updates(self, server_updates):
         # TODO - Optimize same message sending
@@ -190,8 +176,9 @@ class TCPServer:
 
         writer: asyncio.StreamWriter = self._clients[client_id]["writer"]
         try:
-            message = str(message)
-            writer.write(message.encode())
+            data = message.encode()
+            length_prefix = struct.pack("!I", len(data))
+            writer.write(length_prefix + data)
             await writer.drain()
         except ConnectionResetError:
             print(f"Failed to send message to {client_id}, connection lost")
@@ -199,7 +186,11 @@ class TCPServer:
     def _generate_unique_id(self, ip, port):
         unique_str = f"{ip}:{port}"
         hashed = hashlib.sha256(unique_str.encode()).hexdigest()
-        return hashed
+        if hashed not in self._clients.keys():
+            return hashed
+        else:
+            print(f"Failed to generate unique id for {unique_str}")
+            return self._generate_unique_id(ip, port)
 
     async def _read_server_data(self):
         def get_all_queue(queue: mp.Queue):
@@ -231,8 +222,55 @@ class TCPServer:
             pass
 
 
+class GameServer:
+    def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
+        self._network_server = TCPServer(server_ip, server_port, ticks_per_second)
+        self._process = None
+
+        self._close_timeout = 5
+
+    def start(self):
+        self._process = mp.Process(target=self._network_server.asyncio_run)
+        self._process.start()
+
+    def stop(self):
+        self._network_server.state = ServerState.EXITING
+        print(f"[{self.__class__.__name__}] Shutting down server...")
+
+        timer = Timer()
+        while self._process.is_alive():
+            if timer.elapsed_sec() > self._close_timeout:
+                self._process.terminate()
+                print(f"[{self.__class__.__name__}] killed")
+                break
+            self._process.join(timeout=1)
+            if self._process.exitcode is None:
+                print(f"[{self.__class__.__name__}] Waiting server shutdown...")
+        else:
+            print(f"[{self.__class__.__name__}] closed gracefully")
+        self._process = None
+
+    def read_from(self, client_id):
+        # NOTE - Game must not wait for client data
+        clients_data: dict = self._network_server.read_data()
+        return clients_data.get(client_id)
+
+    def read_all(self):
+        # NOTE - Game must not wait for client data
+        return self._network_server.read_data()
+
+    def send_to(self, client_id, data, timeout: float = None):
+        # NOTE - Game must wait for server availability
+        self._network_server.send_data({client_id: data}, timeout=timeout)
+
+    def send_all(self, data, timeout: float = None):
+        # NOTE - Game must wait for server availability
+        self._network_server.send_data({"all": data}, timeout=timeout)
+        
+
+
 def main():
-    game_server = TCPServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
+    game_server = GameServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
     game_server.start()
     timer = Timer()
 
@@ -263,7 +301,7 @@ def main():
                         print("Sending message to", player_name)
                         game_server.send_to(player_name, message)
                     elif isinstance(player_message, LobbyInfoRequest):
-                            game_server.send_to(player_name, LobbyInfoResponse(
+                        game_server.send_to(player_name, LobbyInfoResponse(
                                 status=0,
                                 message="Here ya go!",
                                 player_names=list(clients_data.keys()),

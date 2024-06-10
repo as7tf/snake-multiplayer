@@ -24,6 +24,7 @@ class MessageDecoder:
             parsed_data = json.loads(data)
         except Exception as e:
             print("Error parsing JSON:", e)
+            print("Input data:", data)
             raise ValueError("Invalid input data format")
 
         # Check if parsed_data is a dictionary

@@ -115,9 +115,24 @@ class ClientLoop:
         #   Get game initial state
         #   Get game countdown
 
-        print("At lobby")
-        lobby_info = self.client.get_lobby_info()
-        print(lobby_info)
+        lobby_info = None
+        while True:
+            print("At lobby")
+            while lobby_info is None:
+                lobby_info = self.client.get_lobby_info()
+                time.sleep(0.1)
+                if lobby_info is not None:
+                    break
+                print("Waiting for lobby info...")
+            else:
+                print("Got lobby info!")
+                print(lobby_info)
+                break
+
+        while True:
+            print("Ready to play")
+            time.sleep(2)
+
         
         # print("Lobby ready. Starting the game...")
         # self.game_state = GameState.PLAYING
