@@ -91,7 +91,7 @@ class ClientLoop:
         #   Send player name
         #   Continue to lobby if server approved
         
-        print("Connecting to server...")
+        print("--Connecting to server...")
         connected = self.client.connect_to_server("localhost", GAME_PORT)
         if not connected:
             print("Could not connect to server")
@@ -117,7 +117,7 @@ class ClientLoop:
 
         lobby_info = None
         while True:
-            print("At lobby")
+            print("--At lobby")
             while lobby_info is None:
                 lobby_info = self.client.get_lobby_info()
                 time.sleep(0.1)

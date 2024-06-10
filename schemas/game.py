@@ -1,7 +1,9 @@
-from pydantic import BaseModel
 from typing import List
 
+from pydantic import BaseModel
+
 from constants.message_types import MessageTypes
+from schemas.response import ServerResponse
 
 
 class Position(BaseModel):
@@ -19,7 +21,7 @@ class PlayerCommand(BaseModel):
     command: str
 
 
-class ServerUpdate(BaseModel):
+class ServerUpdate(ServerResponse):
     type: str = MessageTypes.SERVER_UPDATE.value
     players: List[PlayerUpdate]
     game_state: str

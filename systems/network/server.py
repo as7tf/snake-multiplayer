@@ -1,16 +1,20 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from enum import Enum, auto
 import hashlib
 import multiprocessing as mp
 import queue as q
 import struct
 import time
 import traceback as tb
+from concurrent.futures import ThreadPoolExecutor
+from enum import Enum, auto
 
-from schemas.lobby import LobbyInfoRequest, LobbyInfoResponse
+from schemas import (
+    JoinLobbyRequest,
+    LobbyInfoRequest,
+    LobbyInfoResponse,
+    ServerResponse,
+)
 from systems.network.constants import GAME_PORT
-
 from utils.timer import Timer
 
 
@@ -50,7 +54,7 @@ class TCPServer:
 
     def asyncio_run(self):
         self._executor = ThreadPoolExecutor(max_workers=2)
-        
+
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
@@ -92,7 +96,7 @@ class TCPServer:
             try:
                 prefix_length = await reader.read(4)
                 if prefix_length is not None and len(prefix_length) == 4:
-                    message_length = struct.unpack('!I', prefix_length)[0]
+                    message_length = struct.unpack("!I", prefix_length)[0]
                     data = await reader.read(message_length)
             except ConnectionResetError:
                 break
@@ -117,8 +121,12 @@ class TCPServer:
                 start_time = asyncio.get_event_loop().time()
 
                 # Perform both operations concurrently to improve efficiency
-                client_data_task = asyncio.create_task(self._put_client_data(), name="client_data")
-                server_update_task = asyncio.create_task(self._read_server_data(), name="server_update")
+                client_data_task = asyncio.create_task(
+                    self._put_client_data(), name="client_data"
+                )
+                server_update_task = asyncio.create_task(
+                    self._read_server_data(), name="server_update"
+                )
 
                 done, pending = await asyncio.wait(
                     [client_data_task, server_update_task],
@@ -166,7 +174,7 @@ class TCPServer:
 
     async def _broadcast_data(self, message):
         await asyncio.gather(
-            *[self._send_data(client_id, message)for client_id in self._clients]
+            *[self._send_data(client_id, message) for client_id in self._clients]
         )
 
     async def _send_data(self, client_id: str, message: str):
@@ -266,7 +274,6 @@ class GameServer:
     def send_all(self, data, timeout: float = None):
         # NOTE - Game must wait for server availability
         self._network_server.send_data({"all": data}, timeout=timeout)
-        
 
 
 def main():
@@ -276,7 +283,6 @@ def main():
 
     import random
 
-    from schemas import JoinLobbyResponse, JoinLobbyRequest
     from systems.decoder import MessageDecoder
 
     decoder = MessageDecoder()
@@ -297,17 +303,39 @@ def main():
                         continue
                     player_message = decoder.decode_message(player_data)
                     if isinstance(player_message, JoinLobbyRequest):
-                        message = JoinLobbyResponse(status=0, message="Joined lobby").model_dump_json()
-                        print("Sending message to", player_name)
+                        print("Joining lobby", player_name)
+                        message = ServerResponse(
+                            status=0, message="Joined lobby"
+                        ).model_dump_json()
                         game_server.send_to(player_name, message)
                     elif isinstance(player_message, LobbyInfoRequest):
-                        game_server.send_to(player_name, LobbyInfoResponse(
+                        print("Sending lobby info to", player_name)
+                        game_server.send_to(
+                            player_name,
+                            LobbyInfoResponse(
                                 status=0,
                                 message="Here ya go!",
                                 player_names=list(clients_data.keys()),
-                                highscores=["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"],
-                                available_colors=["red", "blue", "green", "yellow", "purple"],
-                            ).model_dump_json()
+                                highscores=[
+                                    "10",
+                                    "9",
+                                    "8",
+                                    "7",
+                                    "6",
+                                    "5",
+                                    "4",
+                                    "3",
+                                    "2",
+                                    "1",
+                                ],
+                                available_colors=[
+                                    "red",
+                                    "blue",
+                                    "green",
+                                    "yellow",
+                                    "purple",
+                                ],
+                            ).model_dump_json(),
                         )
                     else:
                         print("Message type", type(player_message))

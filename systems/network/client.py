@@ -1,17 +1,21 @@
 import asyncio
-from enum import Enum, auto
 import multiprocessing as mp
 import struct
 import time
 import traceback as tb
+from enum import Enum, auto
 
-from schemas.lobby import LobbyInfoResponse
+from pydantic import BaseModel
+
+from schemas import (
+    JoinLobbyRequest,
+    LobbyInfoRequest,
+    LobbyInfoResponse,
+    ServerResponse,
+)
 from systems.decoder import MessageDecoder
-from schemas import JoinLobbyRequest, JoinLobbyResponse, LobbyInfoRequest
-
 from systems.network.constants import GAME_PORT
 from systems.network.data_stream import DataStream
-
 from utils.timer import Timer
 
 
@@ -64,7 +68,7 @@ class _NetworkClient:
         self._connection_lost_exception = (
             ConnectionResetError,
             ConnectionAbortedError,
-            BrokenPipeError
+            BrokenPipeError,
         )
 
     def asyncio_run(self):
@@ -105,7 +109,6 @@ class _NetworkClient:
         with self._internal_state.get_lock():
             self._internal_state.value = state.value
 
-
     # Client State methods
     async def _run(self):
         asyncio.create_task(self._get_response(), name=f"{self._get_response.__name__}")
@@ -128,9 +131,7 @@ class _NetworkClient:
     async def _connection_loop(self):
         try:
             await self._tcp_conn.connect()
-            print(
-                f"Connected to server at {self._tcp_conn.host}:{self._tcp_conn.port}"
-            )
+            print(f"Connected to server at {self._tcp_conn.host}:{self._tcp_conn.port}")
             connected = True
         except ConnectionRefusedError:
             print("Connection refused")
@@ -147,7 +148,6 @@ class _NetworkClient:
             pass
         self.state = ClientState.IDLE
 
-
     # Data operation methods
     async def _get_response(self):
         while self.state != ClientState.EXITING:
@@ -158,10 +158,14 @@ class _NetworkClient:
                 server_data = None
                 try:
                     # TODO - Add a patience to server data age
-                    prefix_length = await asyncio.wait_for(self._tcp_conn.receive_message(4), None)
+                    prefix_length = await asyncio.wait_for(
+                        self._tcp_conn.receive_message(4), None
+                    )
                     if prefix_length is not None and len(prefix_length) == 4:
-                        message_length = struct.unpack('!I', prefix_length)[0]
-                        server_data = await asyncio.wait_for(self._tcp_conn.receive_message(message_length), None)
+                        message_length = struct.unpack("!I", prefix_length)[0]
+                        server_data = await asyncio.wait_for(
+                            self._tcp_conn.receive_message(message_length), None
+                        )
 
                         server_data = server_data.decode("utf-8")
                         self._response_stream.write(server_data)
@@ -186,7 +190,7 @@ class _NetworkClient:
 
                         # Create the length prefix
                         message_length = len(data)
-                        length_prefix = struct.pack('!I', message_length)
+                        length_prefix = struct.pack("!I", message_length)
                         data = length_prefix + data
 
                         await asyncio.wait_for(self._tcp_conn.send_message(data), None)
@@ -280,7 +284,7 @@ class SnakeClient:
         self._get_game_state = lambda: game.state
         self._decoder = MessageDecoder()
 
-    def _get_server_message(self):
+    def _get_server_message(self) -> ServerResponse:
         # NOTE - This is the only method to get data from the server
         # Possible outcomes:
         #    1. Data received
@@ -288,17 +292,14 @@ class SnakeClient:
         #    3. Error raised
 
         server_message = self._client.read_response()
-        if server_message is None:
-            return None
-        elif server_message == "":
+        if server_message == "":
             print("Server disconnected")
             self.disconnect_from_server()
             return None
         else:
-            response = self._decoder.decode_message(server_message)
-            return response            
+            return server_message
 
-    def _send_client_message(self, message) -> bool:
+    def _send_client_message(self, message: BaseModel) -> bool:
         # NOTE - This is the only method to send data to the server
         # Possible outcomes:
         #    1. Data sent
@@ -306,6 +307,19 @@ class SnakeClient:
 
         self._client.send_message(message.model_dump_json())
 
+    def _request(
+        self, request: BaseModel, response_schema: ServerResponse
+    ) -> ServerResponse:
+        self._send_client_message(request)
+        time.sleep(1)  # Wait for server to respond
+        response = self._get_server_message()
+
+        if response is not None:
+            response = self._decoder.decode_message(response)
+            if not isinstance(response, response_schema):
+                print(f"Unexpected server message: {response}")
+                return None
+        return response
 
     # Game connection
     def disconnect_from_server(self) -> bool:
@@ -328,39 +342,30 @@ class SnakeClient:
             return False
 
     def try_lobby_join(self, player_name: str) -> bool:
-        join_lobby_msg = JoinLobbyRequest(player_name=player_name)
-        self._send_client_message(join_lobby_msg)
+        join_request = JoinLobbyRequest(player_name=player_name)
+        response = self._request(join_request, ServerResponse)
 
-        time.sleep(0.2)
-
-        response = self._get_server_message()
-
-        if isinstance(response, JoinLobbyResponse):
-            if response.status == 0:
-                return True
-            else:
-                print("Error joining lobby: ", response.message)
-                return False
-        else:
+        if response is None:
             return False
-
+        elif response.status == 0:
+            return True
+        else:
+            print("Error joining lobby: ", response.message)
+            return False
 
     # Game lobby
     def get_lobby_info(self):
-        # NOTE - This should be ran continuously
+        # NOTE - This should be ran periodically to update lobby info
         # Get available colors
         # Get other players' info
         # Get highscores
         # etc.
 
         lobby_info_req = LobbyInfoRequest()
-        self._send_client_message(lobby_info_req)
-
-        lobby_info = self._get_server_message()
-        if isinstance(lobby_info, LobbyInfoResponse):
-            return lobby_info.model_dump_json()
-        else:
-            return None
+        lobby_message: LobbyInfoResponse = self._request(
+            lobby_info_req, LobbyInfoResponse
+        )
+        return lobby_message
 
     def choose_color(self, color: str) -> bool:
         # NOTE - Test in server if the color is available
@@ -371,7 +376,6 @@ class SnakeClient:
 
     def wait_game_start(self) -> dict:
         pass
-
 
     # Play loop
     def get_server_update(self) -> dict:
@@ -391,6 +395,7 @@ def main():
             return
 
         import random
+
         directions = ["UP", "LEFT", "RIGHT", "DOWN"]
 
         client_throttle = 0.02
@@ -400,14 +405,14 @@ def main():
             time.sleep(client_throttle)
 
             # Message sending logic
-            player_data = {"snake_direction": directions[random.randint(0,3)]}
+            player_data = {"snake_direction": directions[random.randint(0, 3)]}
 
             # The writing speed is limited by the connection tick rate
             success = game_client.send_message(player_data)
 
             # Response reading logic
             server_data = game_client.read_response()
-            if server_data == '':
+            if server_data == "":
                 print("Server disconnected")
                 break
             elif server_data is None:

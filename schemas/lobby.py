@@ -1,8 +1,9 @@
 from typing import List
+
 from pydantic import BaseModel
 
 from constants.message_types import MessageTypes
-from schemas.base import ServerResponse
+from schemas.response import ServerResponse
 
 
 # Client requests
@@ -22,11 +23,7 @@ class PlayerConfigRequest(BaseModel):
 
 # Server responses
 class LobbyInfoResponse(ServerResponse):
+    type: str = MessageTypes.LOBBY_INFO_RESPONSE.value
     player_names: List[str]
     highscores: List[str]
     available_colors: List[str]
-    type: str = MessageTypes.LOBBY_INFO_RESPONSE.value
-
-
-class JoinLobbyResponse(ServerResponse):
-    type: str = MessageTypes.JOIN_LOBBY_RESPONSE.value
