@@ -3,10 +3,11 @@ import hashlib
 import multiprocessing as mp
 import queue as q
 import struct
+import threading as th
 import time
 import traceback as tb
-from concurrent.futures import ThreadPoolExecutor
 from enum import Enum, auto
+from typing import Callable
 
 from schemas import (
     JoinLobbyRequest,
@@ -16,6 +17,7 @@ from schemas import (
 )
 from systems.decoder import MessageDecoder
 from systems.network.constants import GAME_PORT
+from systems.network.data_stream import DataStream
 from utils.timer import Timer
 
 
@@ -25,39 +27,85 @@ class ServerState(Enum):
     EXITING = auto()
 
 
-# TODO - Follow client design
+class ClientWriter:
+    def __init__(self, client_id, writer):
+        self.client_id = client_id
+        self.writer: asyncio.StreamWriter = writer
+        self._lock = asyncio.Lock()
+
+    async def write(self, data):
+        async with self._lock:
+            self.writer.write(data)
+            await self.writer.drain()
+
+    def __hash__(self):
+        return hash(self.client_id)
+
+    def __eq__(self, other):
+        if isinstance(other, ClientWriter):
+            return self.client_id == other.client_id
+        return False
+
+    def __repr__(self) -> str:
+        return self.client_id
+
+
+class ClientList:
+    def __init__(self):
+        self._manager = mp.Manager()
+        self._shared_clients = self._manager.list()
+        self._clients = []
+
+    def append(self, client_writer: ClientWriter):
+        self._clients.append(client_writer)
+        self._shared_clients.append(client_writer.client_id)
+
+    def remove(self, client_writer: ClientWriter):
+        self._clients.remove(client_writer)
+        self._shared_clients.remove(client_writer.client_id)
+
+    def public_get(self):
+        return [client_id for client_id in self._shared_clients]
+
+    def __contains__(self, item):
+        return item in self._clients
+
+    def __len__(self):
+        return len(self._clients)
+
+    def __iter__(self):
+        return iter(self._clients)
+
+
 class TCPServer:
     def __init__(self, host_ip, host_port, ticks_per_second: int = 50):
-        self._message_queue = mp.Queue(maxsize=100)
-        self._response_queue = mp.Queue(maxsize=1)
+        self._request_queue = mp.Queue(maxsize=10)
+        self._broadcast_queue = mp.Queue(maxsize=10)
+        self._internal_state = mp.Value("i", ServerState.IDLE.value)
+
+        self._clients = ClientList()
 
         self.ip = host_ip
         self.port = host_port
 
-        self._internal_state = mp.Value("i", ServerState.IDLE.value)
-        self._close_timeout = 5
         self._throttle = 1 / ticks_per_second
 
-        self._clients = {}
-
-        self._executor = None
-        self._process = None
         self._loop = None
 
-    def send_data(self, data: str, timeout: float = None):
-        self._message_queue.put(data, timeout=timeout)
+    def broadcast_data(self, data: str, timeout: float = None):
+        self._broadcast_queue.put(data, timeout=timeout)
 
-    def read_data(self, timeout: float = None):
+    def read_request(self, timeout=None) -> tuple[str, DataStream, str]:
         try:
-            return self._response_queue.get(timeout=timeout)
+            return self._request_queue.get(timeout=timeout)
         except q.Empty:
             return None
 
-    def asyncio_run(self):
-        self._executor = ThreadPoolExecutor(max_workers=2)
+    def get_clients(self):
+        return self._clients.public_get()
 
-        self._loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._loop)
+    def asyncio_run(self):
+        self._loop = asyncio.get_event_loop()
         try:
             self._loop.run_until_complete(self._run())
         except KeyboardInterrupt:
@@ -67,6 +115,7 @@ class TCPServer:
                 asyncio.gather(*asyncio.all_tasks(self._loop), return_exceptions=True)
             )
         except:
+            print("\nAsyncio server exception not handled:")
             tb.print_exc()
         finally:
             self._loop.close()
@@ -84,13 +133,28 @@ class TCPServer:
         with self._internal_state.get_lock():
             self._internal_state.value = state.value
 
+    async def _run(self):
+        self._server = await asyncio.start_server(
+            self._handle_client, self.ip, self.port
+        )
+        addr = self._server.sockets[0].getsockname()
+        print(f"Serving on {addr}")
+
+        self.state = ServerState.RUNNING
+        while self.state != ServerState.EXITING:
+            await asyncio.sleep(self._throttle)
+
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ):
         addr = writer.get_extra_info("peername")
-        client_id = self._generate_unique_id(addr[0], addr[1])[:6]
-        self._clients[client_id] = {"data": None, "writer": writer}
-        print(f"Connected to {client_id}")
+        client_writer = ClientWriter(
+            self._generate_unique_id(addr[0], addr[1])[:6], writer
+        )
+        self._clients.append(client_writer)
+
+        print(f"Connected to {client_writer}")
+        client_stream = DataStream()
 
         # Connection loop
         while self.state == ServerState.RUNNING:
@@ -103,138 +167,76 @@ class TCPServer:
                 break
             if not prefix_length or not data:
                 break
-            self._clients[client_id]["data"] = data.decode()
+
+            # Handle message
+            self._request_queue.put(
+                (client_writer.client_id, client_stream, data.decode())
+            )
+            asyncio.create_task(self._response_processor(client_writer, client_stream))
 
         # Disconnected
-        print(f"Client {client_id} disconnected")
-        del self._clients[client_id]
+        print(f"Client {client_writer} disconnected")
+        self._clients.remove(client_writer)
         try:
             writer.close()
             await writer.wait_closed()
         except ConnectionResetError:
             pass
 
-    async def _run(self):
-        await self._start_server()
-        self.state = ServerState.RUNNING
-        try:
-            while self.state != ServerState.EXITING:
-                start_time = asyncio.get_event_loop().time()
+    async def _response_processor(self, client_writer, client_stream: DataStream):
+        while self.state == ServerState.RUNNING:
+            response = client_stream.read()
+            if response is not None:
+                await self._send_data(client_writer, response)
+                break
+            await asyncio.sleep(0.1)
 
-                # Perform both operations concurrently to improve efficiency
-                client_data_task = asyncio.create_task(
-                    self._put_client_data(), name="client_data"
+    async def _broadcaster(self, message):
+        while self.state == ServerState.RUNNING:
+            if not self._broadcast_queue.empty():
+                message = self._broadcast_queue.get_nowait()
+                await asyncio.gather(
+                    *[
+                        self._send_data(client_writer, message)
+                        for client_writer in self._clients
+                    ]
                 )
-                server_update_task = asyncio.create_task(
-                    self._read_server_data(), name="server_update"
-                )
+            await asyncio.sleep(0.1)
 
-                done, pending = await asyncio.wait(
-                    [client_data_task, server_update_task],
-                    return_when=asyncio.ALL_COMPLETED,  # Wait for all tasks to complete
-                )
-
-                # Process completed tasks
-                for task in done:
-                    if task == client_data_task:
-                        await task  # Ensure any exceptions are raised
-                    elif task == server_update_task:
-                        server_updates = await task
-                        await self._send_server_updates(server_updates)
-                for task in pending:
-                    await task
-
-                end_time = asyncio.get_event_loop().time()
-                elapsed_time = end_time - start_time
-                sleep_time = max(0, self._throttle - elapsed_time)
-
-                await asyncio.sleep(sleep_time)
-        except asyncio.CancelledError:
-            pass
-
-    async def _start_server(self):
-        self._server = await asyncio.start_server(
-            self._handle_client, self.ip, self.port
-        )
-        addr = self._server.sockets[0].getsockname()
-        print(f"Serving on {addr}")
-
-        self.state = ServerState.RUNNING
-
-    async def _send_server_updates(self, server_updates):
-        # TODO - Optimize same message sending
-        # TODO - Optimize sending multiple messages to the same client
-        for update in server_updates:
-            if not update:
-                return
-            elif "all" in update:
-                await self._broadcast_data(update["all"])
-            else:
-                client_id, message = next(iter(update.items()))
-                await self._send_data(client_id, message)
-
-    async def _broadcast_data(self, message):
-        await asyncio.gather(
-            *[self._send_data(client_id, message) for client_id in self._clients]
-        )
-
-    async def _send_data(self, client_id: str, message: str):
-        if client_id not in self._clients:
-            print(f"Client id '{client_id}' not found")
+    async def _send_data(self, client_writer: ClientWriter, message: str):
+        if client_writer not in self._clients:
+            print(f"Client id '{client_writer}' not found")
             return
-
-        writer: asyncio.StreamWriter = self._clients[client_id]["writer"]
         try:
             data = message.encode()
             length_prefix = struct.pack("!I", len(data))
-            writer.write(length_prefix + data)
-            await writer.drain()
+            await client_writer.write(length_prefix + data)
         except ConnectionResetError:
-            print(f"Failed to send message to {client_id}, connection lost")
+            print(f"Failed to send message to {client_writer}, connection lost")
 
     def _generate_unique_id(self, ip, port):
         unique_str = f"{ip}:{port}"
         hashed = hashlib.sha256(unique_str.encode()).hexdigest()
-        if hashed not in self._clients.keys():
+        if hashed not in self._clients:
             return hashed
         else:
             print(f"Failed to generate unique id for {unique_str}")
             return self._generate_unique_id(ip, port)
 
-    async def _read_server_data(self):
-        def get_all_queue(queue: mp.Queue):
-            data = []
-            while not queue.empty():
-                data.append(queue.get_nowait())
-            data.reverse()
-            return data
-
-        return await self._loop.run_in_executor(
-            self._executor,
-            get_all_queue,
-            self._message_queue,
-        )
-
-    async def _put_client_data(self):
-        client_data = {}
-        for client_id in self._clients:
-            client_data[client_id] = self._clients[client_id]["data"]
-            self._clients[client_id]["data"] = None
-
-        try:
-            await self._loop.run_in_executor(
-                self._executor,
-                self._response_queue.put_nowait,
-                client_data,
-            )
-        except q.Full:
-            pass
-
 
 class GameServer:
-    def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
+    def __init__(
+        self,
+        server_ip,
+        server_port,
+        request_handler: Callable,
+        ticks_per_second: float = 50,
+    ):
         self._network_server = TCPServer(server_ip, server_port, ticks_per_second)
+
         self._process = None
+        self._responder_thread = None
+        self._req_handler = request_handler
 
         self._close_timeout = 5
 
@@ -242,10 +244,21 @@ class GameServer:
         self._process = mp.Process(target=self._network_server.asyncio_run)
         self._process.start()
 
+        self._responder_thread = th.Thread(target=self._request_processor)
+        self._responder_thread.start()
+
     def stop(self):
         self._network_server.state = ServerState.EXITING
         print(f"[{self.__class__.__name__}] Shutting down server...")
 
+        self._stop_process()
+        self._responder_thread.join()
+
+    @property
+    def connected_players(self):
+        return self._network_server.get_clients()
+
+    def _stop_process(self):
         timer = Timer()
         while self._process.is_alive():
             if timer.elapsed_sec() > self._close_timeout:
@@ -259,29 +272,29 @@ class GameServer:
             print(f"[{self.__class__.__name__}] closed gracefully")
         self._process = None
 
-    def read_from(self, client_id):
-        # NOTE - Game must not wait for client data
-        clients_data: dict = self._network_server.read_data()
-        return clients_data.get(client_id)
-
-    def read_all(self):
-        # NOTE - Game must not wait for client data
-        return self._network_server.read_data()
-
-    def send_to(self, client_id, data, timeout: float = None):
-        # NOTE - Game must wait for server availability
-        self._network_server.send_data({client_id: data}, timeout=timeout)
-
-    def send_all(self, data, timeout: float = None):
-        # NOTE - Game must wait for server availability
-        self._network_server.send_data({"all": data}, timeout=timeout)
+    def _request_processor(self):
+        while self._network_server.state != ServerState.EXITING:
+            request = self._network_server.read_request(timeout=0.1)
+            if request is not None:
+                client_id, client_stream, data = request
+                response: str = self._req_handler(client_id, data)
+                success = False
+                while not success:
+                    success = client_stream.write(response, timeout=0.1)
+                    if not success:
+                        print(
+                            f"[{self._request_processor.__name__}] Failed to send response to {client_id}"
+                        )
 
 
 class SnakeServer:
     def __init__(self, server_ip, server_port, ticks_per_second: float = 50):
-        self._server = GameServer(server_ip, server_port, ticks_per_second)
+        self._server = GameServer(
+            server_ip, server_port, self.request_responder, ticks_per_second
+        )
 
         self._decoder = MessageDecoder()
+        self.joined_players = set()
 
     def start(self):
         self._server.start()
@@ -289,53 +302,52 @@ class SnakeServer:
     def stop(self):
         self._server.stop()
 
-    def get_player_requests(self):
-        clients_data = self._server.read_all()
-        if clients_data:
-            print(f"Players data: {clients_data}")
-            player_data = {}
+    @property
+    def connected_players(self):
+        return self._server.connected_players
 
-            for player_name, player_data in clients_data.items():
-                if player_data is None:
-                    continue
-                player_message = self._decoder.decode_message(player_data)
-                if isinstance(player_message, JoinLobbyRequest):
-                    print("Joining lobby", player_name)
-                    message = ServerResponse(
-                        status=0, message="Joined lobby"
-                    ).model_dump_json()
-                    self._server.send_to(player_name, message)
-                elif isinstance(player_message, LobbyInfoRequest):
-                    print("Sending lobby info to", player_name)
-                    self._server.send_to(
-                        player_name,
-                        LobbyInfoResponse(
-                            status=0,
-                            message="Here ya go!",
-                            player_names=list(clients_data.keys()),
-                            highscores=[
-                                "10",
-                                "9",
-                                "8",
-                                "7",
-                                "6",
-                                "5",
-                                "4",
-                                "3",
-                                "2",
-                                "1",
-                            ],
-                            available_colors=[
-                                "red",
-                                "blue",
-                                "green",
-                                "yellow",
-                                "purple",
-                            ],
-                        ).model_dump_json(),
-                    )
-                else:
-                    print("Message type", type(player_message))
+    def request_responder(self, client_id, request: str):
+        if client_id not in self.joined_players:
+            self.joined_players.add(client_id)
+
+        player_message = self._decoder.decode_message(request)
+        print(f"Got {player_message.__class__.__name__} from {client_id}")
+        if isinstance(player_message, JoinLobbyRequest):
+            print("Player joining lobby:", client_id)
+            self.joined_players.add(client_id)
+            message = ServerResponse(status=0, message="Joined lobby").model_dump_json()
+            return message
+        elif isinstance(player_message, LobbyInfoRequest):
+            print("Sending lobby info to", client_id)
+            return LobbyInfoResponse(
+                status=0,
+                message="Here ya go!",
+                player_names=list(self.joined_players),
+                highscores=[
+                    "10",
+                    "9",
+                    "8",
+                    "7",
+                    "6",
+                    "5",
+                    "4",
+                    "3",
+                    "2",
+                    "1",
+                ],
+                available_colors=[
+                    "red",
+                    "blue",
+                    "green",
+                    "yellow",
+                    "purple",
+                ],
+            ).model_dump_json()
+
+        else:
+            print("Message type", type(player_message))
+            return ServerResponse(status=1, message="Invalid message").model_dump_json()
+
 
 def main():
     game_server = SnakeServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
@@ -348,7 +360,6 @@ def main():
         while True:
             time.sleep(server_throttle)
             timer.reset()
-            game_server.get_player_requests()
             # print(f"Time elapsed: {round(timer.elapsed_ms(), 1)} ms")
     except KeyboardInterrupt:
         game_server.stop()
