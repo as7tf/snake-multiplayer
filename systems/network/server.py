@@ -16,7 +16,7 @@ from schemas import (
     ServerResponse,
 )
 from systems.decoder import MessageDecoder
-from systems.network.constants import GAME_PORT
+from systems.network.constants import GAME_PORT, CONNECTION_EXCEPTION
 from systems.network.data_stream import DataStream
 from utils.timer import Timer
 
@@ -67,7 +67,6 @@ class ClientConnection:
             data = await self._network_reader.read(message_length)
             return data
         else:
-            print(f"Failed to receive message from {self.id}")
             return None
 
     def read_server_response(self):
@@ -224,17 +223,26 @@ class TCPServer:
         while self.state == ServerState.LOBBY:
             response = client_conn.read_server_response()
             if response is not None:
-                await client_conn.network_send(response)
-                break
+                try:
+                    await client_conn.network_send(response)
+                except CONNECTION_EXCEPTION:
+                    pass
+                finally:
+                    break
             await asyncio.sleep(0.01)
 
     async def _broadcaster(self, message):
         while self.state != ServerState.EXITING:
             if not self._broadcast_queue.empty():
                 message = self._broadcast_queue.get_nowait()
-                await asyncio.gather(
-                    *[client.network_send(message) for client in self._clients]
-                )
+                try:
+                    await asyncio.gather(
+                        *[client.network_send(message) for client in self._clients]
+                    )
+                except CONNECTION_EXCEPTION:
+                    pass
+                finally:
+                    break
             await asyncio.sleep(0.01)
 
     def _generate_unique_id(self, ip, port):
@@ -323,6 +331,8 @@ class SnakeServer:
         )
 
         self._decoder = MessageDecoder()
+
+        # TODO - Check for disconnected players
         self.joined_players = set()
 
     def start(self):
@@ -337,9 +347,6 @@ class SnakeServer:
         return self._server.connected_players
 
     def request_responder(self, client_id, request: str):
-        if client_id not in self.joined_players:
-            self.joined_players.add(client_id)
-
         player_message = self._decoder.decode_message(request)
         print(f"Got {player_message.__class__.__name__} from {client_id}")
         if isinstance(player_message, JoinLobbyRequest):

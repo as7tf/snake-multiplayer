@@ -14,7 +14,7 @@ from schemas import (
     ServerResponse,
 )
 from systems.decoder import MessageDecoder
-from systems.network.constants import GAME_PORT
+from systems.network.constants import GAME_PORT, CONNECTION_EXCEPTION
 from systems.network.data_stream import DataStream
 from utils.timer import Timer
 
@@ -64,12 +64,6 @@ class _NetworkClient:
         self._process = None
         self._read_server_task = None
         self._loop = None
-
-        self._connection_lost_exception = (
-            ConnectionResetError,
-            ConnectionAbortedError,
-            BrokenPipeError,
-        )
 
     def asyncio_run(self):
         self._loop = asyncio.get_event_loop()
@@ -144,7 +138,7 @@ class _NetworkClient:
     async def _disconnect_loop(self):
         try:
             await self._tcp_conn.disconnect()
-        except self._connection_lost_exception:
+        except CONNECTION_EXCEPTION:
             pass
         self.state = ClientState.IDLE
 
@@ -169,7 +163,7 @@ class _NetworkClient:
 
                         server_data = server_data.decode("utf-8")
                         self._response_stream.write(server_data)
-                except self._connection_lost_exception:
+                except CONNECTION_EXCEPTION:
                     print("Connection lost")
                     self.state = ClientState.IDLE
 
@@ -194,7 +188,7 @@ class _NetworkClient:
                         data = length_prefix + data
 
                         await asyncio.wait_for(self._tcp_conn.send_message(data), None)
-                except self._connection_lost_exception:
+                except CONNECTION_EXCEPTION:
                     pass
 
                 elapsed_time = asyncio.get_event_loop().time() - start_time
