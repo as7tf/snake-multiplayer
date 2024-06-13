@@ -16,7 +16,7 @@ from schemas import (
 from systems.decoder import MessageDecoder
 from systems.network.constants import GAME_PORT, CONNECTION_EXCEPTION
 from systems.network.data_stream import DataStream
-from utils.timer import Timer
+from utils.timer import Timer, print_async_func_time, print_func_time
 
 
 class TCPClient:
@@ -278,6 +278,7 @@ class SnakeClient:
         self._get_game_state = lambda: game.state
         self._decoder = MessageDecoder()
 
+    # @print_func_time
     def _get_server_message(self, timeout: float = 0) -> ServerResponse:
         # NOTE - This is the only method to get data from the server
         # Possible outcomes:

@@ -16,9 +16,9 @@ from schemas import (
     ServerResponse,
 )
 from systems.decoder import MessageDecoder
-from systems.network.constants import GAME_PORT, CONNECTION_EXCEPTION
+from systems.network.constants import CONNECTION_EXCEPTION, GAME_PORT
 from systems.network.data_stream import DataStream
-from utils.timer import Timer
+from utils.timer import Timer, print_async_func_time, print_func_time
 
 
 class ServerState(Enum):
@@ -29,7 +29,31 @@ class ServerState(Enum):
 
 
 class AwaitableQueue:
-    pass
+    def __init__(
+        self,
+        maxsize: int,
+    ):
+        self._queue = mp.Queue(maxsize)
+        self._loop = None
+
+    def set_loop(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
+
+    # @print_async_func_time
+    async def async_put(self, item, timeout=None):
+        await self._loop.run_in_executor(None, self._queue.put, item, True, timeout)
+
+    # @print_async_func_time
+    async def async_get(self, timeout=None):
+        return await self._loop.run_in_executor(None, self._queue.get, True, timeout)
+
+    # @print_func_time
+    def get(self, timeout=None):
+        return self._queue.get(timeout=timeout)
+
+    # @print_func_time
+    def put(self, item, timeout=None):
+        self._queue.put(item, timeout=timeout)
 
 
 class ClientConnection:
@@ -42,6 +66,7 @@ class ClientConnection:
         self._network_writer = network_writer
         self._network_reader = network_reader
         self._network_lock = asyncio.Lock()
+        self._network_loop = asyncio.get_running_loop()
 
         self.id = client_id
 
@@ -69,8 +94,10 @@ class ClientConnection:
         else:
             return None
 
-    def read_server_response(self):
-        return self.response_pipe.read()
+    async def read_server_response(self, timeout=0):
+        return await self._network_loop.run_in_executor(
+            None, self.response_pipe.read, timeout
+        )
 
     def write_client_data(self, data):
         self.client_data_pipe.write(data)
@@ -116,8 +143,8 @@ class ClientList:
 
 class TCPServer:
     def __init__(self, host_ip, host_port, ticks_per_second: int = 50):
-        self._request_queue = mp.Queue(maxsize=10)
-        self._broadcast_queue = mp.Queue(maxsize=10)
+        self._request_queue = AwaitableQueue(maxsize=10)
+        self._broadcast_queue = AwaitableQueue(maxsize=10)
         self._internal_state = mp.Value("i", ServerState.IDLE.value)
 
         self._clients = ClientList()
@@ -142,7 +169,10 @@ class TCPServer:
         return self._clients.public_get()
 
     def asyncio_run(self):
+        """Process main loop"""
         self._loop = asyncio.get_event_loop()
+        self._request_queue.set_loop(self._loop)
+        self._broadcast_queue.set_loop(self._loop)
         try:
             self._loop.run_until_complete(self._run())
         except KeyboardInterrupt:
@@ -189,6 +219,7 @@ class TCPServer:
             self._generate_unique_id(addr[0], addr[1])[:6], writer, reader
         )
         self._clients.append(client_conn)
+        asyncio.create_task(self._response_processor(client_conn))
 
         print(f"Connected to {client_conn.id}")
 
@@ -203,13 +234,13 @@ class TCPServer:
 
             if self.state == ServerState.LOBBY:
                 # Handle message
-                self._request_queue.put(
-                    (client_conn.id, client_conn.response_pipe, data.decode())
+                await self._request_queue.async_put(
+                    (client_conn.id, client_conn.response_pipe, data.decode()),
+                    timeout=2,
                 )
             elif self.state == ServerState.PLAYING:
                 # TODO - Use shared DataStream for player updates
                 pass
-            asyncio.create_task(self._response_processor(client_conn))
 
         # Disconnected
         print(f"Client {client_conn.id} disconnected")
@@ -220,30 +251,26 @@ class TCPServer:
             pass
 
     async def _response_processor(self, client_conn: ClientConnection):
-        while self.state == ServerState.LOBBY:
-            response = client_conn.read_server_response()
+        """This asyncio task runs along the server"""
+        while self.state != ServerState.EXITING:
+            response = await client_conn.read_server_response(1)
             if response is not None:
                 try:
                     await client_conn.network_send(response)
                 except CONNECTION_EXCEPTION:
-                    pass
-                finally:
                     break
-            await asyncio.sleep(0.01)
 
     async def _broadcaster(self, message):
+        """This asyncio task runs along the server"""
         while self.state != ServerState.EXITING:
-            if not self._broadcast_queue.empty():
-                message = self._broadcast_queue.get_nowait()
+            message = await self._broadcast_queue.async_get(timeout=0.2)
+            if message is not None:
                 try:
                     await asyncio.gather(
                         *[client.network_send(message) for client in self._clients]
                     )
                 except CONNECTION_EXCEPTION:
-                    pass
-                finally:
                     break
-            await asyncio.sleep(0.01)
 
     def _generate_unique_id(self, ip, port):
         unique_str = f"{ip}:{port}"
@@ -311,13 +338,13 @@ class GameServer:
         while self._network_server.state != ServerState.EXITING:
             time.sleep(1)
             while self._network_server.state == ServerState.LOBBY:
-                client_request = self._network_server.read_request(timeout=0.1)
+                client_request = self._network_server.read_request(timeout=2)
                 if client_request is not None:
                     client_id, response_pipe, data = client_request
                     response: str = self._req_handler(client_id, data)
                     success = False
                     while not success:
-                        success = response_pipe.write(response, timeout=0.1)
+                        success = response_pipe.write(response, timeout=0.2)
                         if not success:
                             print(
                                 f"[{self._request_processor.__name__}] Failed to send response to {client_id}"

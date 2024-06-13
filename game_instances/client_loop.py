@@ -5,6 +5,8 @@ import time
 import traceback as tb
 
 import os
+
+from utils.timer import Timer
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 
@@ -116,12 +118,14 @@ class ClientLoop:
         #   Get game countdown
 
         lobby_info = None
+        sleep_time = 0.5
         print("--At lobby")
         while True:
             # while lobby_info is None:
+                timer = Timer()
                 lobby_info = self.client.get_lobby_info()
                 print("Lobby info:", lobby_info)
-                time.sleep(0.5)
+                time.sleep(max(0, sleep_time - timer.elapsed_sec()))
                 # if lobby_info is not None:
                 #     break
                 # print("Waiting for lobby info...")
@@ -129,11 +133,6 @@ class ClientLoop:
             #     print("Got lobby info!")
             #     print(lobby_info)
             #     break
-
-        while True:
-            print("--Playing")
-            time.sleep(2)
-
         
         # print("Lobby ready. Starting the game...")
         # self.game_state = GameState.PLAYING

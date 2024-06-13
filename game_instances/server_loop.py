@@ -3,6 +3,8 @@ import random
 import time
 from enum import Enum, auto
 
+import os
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 
 from entities.type import Food, Snake
@@ -80,8 +82,10 @@ class ServerLoop:
             # TODO - Wait for a ready message
             # TODO - Limit players
             # TODO - Block new connections after game start
-
-            print("Current players:", self._server.connected_players)
+            self._server.joined_players.intersection_update(
+                self._server.connected_players
+            )
+            print("Players in lobby:", self._server.joined_players)
 
             # Assuming lobby ends after a certain number of players join
             if len(self._server.connected_players) >= 2:
@@ -103,6 +107,9 @@ class ServerLoop:
 
         while True:
             print("Playing")
+            self._server.joined_players.intersection_update(
+                self._server.connected_players
+            )
             time.sleep(2)
 
         def serialize_entities(entities):
