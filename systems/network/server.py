@@ -360,7 +360,7 @@ class SnakeServer:
         self._decoder = MessageDecoder()
 
         # TODO - Check for disconnected players
-        self.joined_players = set()
+        self._joined_players = set()
 
     def start(self):
         self._server.start()
@@ -373,20 +373,24 @@ class SnakeServer:
     def connected_players(self):
         return self._server.connected_players
 
+    def get_joined_players(self):
+        self._joined_players.intersection_update(self._server.connected_players)
+        return self._joined_players
+
     def request_responder(self, client_id, request: str):
         player_message = self._decoder.decode_message(request)
         print(f"Got {player_message.__class__.__name__} from {client_id}")
         if isinstance(player_message, JoinLobbyRequest):
             print("Player joining lobby:", client_id)
-            self.joined_players.add(client_id)
             message = ServerResponse(status=0, message="Joined lobby").model_dump_json()
+            self._joined_players.add(client_id)
             return message
         elif isinstance(player_message, LobbyInfoRequest):
             print("Sending lobby info to", client_id)
             return LobbyInfoResponse(
                 status=0,
                 message="Here ya go!",
-                player_names=list(self.joined_players),
+                player_names=list(self.get_joined_players()),
                 highscores=[
                     "10",
                     "9",

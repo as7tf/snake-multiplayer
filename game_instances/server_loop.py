@@ -82,10 +82,7 @@ class ServerLoop:
             # TODO - Wait for a ready message
             # TODO - Limit players
             # TODO - Block new connections after game start
-            self._server.joined_players.intersection_update(
-                self._server.connected_players
-            )
-            print("Players in lobby:", self._server.joined_players)
+            print("Players in lobby:", self._server.get_joined_players())
 
             # Assuming lobby ends after a certain number of players join
             if len(self._server.connected_players) >= 2:
@@ -107,9 +104,6 @@ class ServerLoop:
 
         while True:
             print("Playing")
-            self._server.joined_players.intersection_update(
-                self._server.connected_players
-            )
             time.sleep(2)
 
         def serialize_entities(entities):
