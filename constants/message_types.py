@@ -12,3 +12,5 @@ class MessageTypes(Enum):
     # Server side
     LOBBY_INFO_RESPONSE = "lobby_info_response"
     SERVER_RESPONSE = "server_response"
+    GAME_READY = "ready"
+    ENTITIES = "entities"

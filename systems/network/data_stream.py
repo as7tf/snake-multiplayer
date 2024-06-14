@@ -10,13 +10,20 @@ class DataStream:
 
     def write(self, data, timeout: float = 0) -> bool:
         """Thread and Process safe"""
+        if timeout in (0, None):
+            if self._read.poll():
+                return False
+            else:
+                self._write.send(data)
+                return True
+
+        # Wait for timeout
         self._timer.reset()
         while self._read.poll():
             if self._timer.elapsed_sec() < timeout:
                 return False
-        else:
-            self._write.send(data)
-            return True
+        self._write.send(data)
+        return True
 
     def read(self, timeout: float = 0) -> str | None:
         """Thread and Process safe"""

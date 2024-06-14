@@ -16,7 +16,8 @@ class RenderSystem(System):
         pygame.display.set_caption("Snake Game")
 
     def setup(self):
-        pass
+        self.window.fill((255, 255, 255))
+        pygame.display.flip()
 
     def run(self, entities: list[Entity]):
         self.window.fill((255, 255, 255))

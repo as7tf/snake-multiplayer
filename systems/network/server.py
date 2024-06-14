@@ -9,12 +9,15 @@ import traceback as tb
 from enum import Enum, auto
 from typing import Callable
 
+from entities.type import Food, Snake
 from schemas import (
     JoinLobbyRequest,
     LobbyInfoRequest,
     LobbyInfoResponse,
     ServerResponse,
 )
+from schemas.entities import EntitiesMessage, EntityMessage
+from schemas.game import GameReady, PlayerCommand
 from systems.decoder import MessageDecoder
 from systems.network.constants import CONNECTION_EXCEPTION, GAME_PORT
 from systems.network.data_stream import DataStream
@@ -45,7 +48,10 @@ class AwaitableQueue:
 
     # @print_async_func_time
     async def async_get(self, timeout=None):
-        return await self._loop.run_in_executor(None, self._queue.get, True, timeout)
+        try:
+            return await self._loop.run_in_executor(None, self._queue.get, True, timeout)
+        except q.Empty:
+            return None
 
     # @print_func_time
     def get(self, timeout=None):
@@ -114,37 +120,51 @@ class ClientConnection:
         return self.id
 
 
+class MPClientConnection:
+    def __init__(self, client_connection: ClientConnection):
+        self.id = client_connection.id
+        self.client_data_pipe = client_connection.client_data_pipe
+
+    def __eq__(self, other):
+        if isinstance(other, MPClientConnection):
+            return self.id == other.id
+        return False
+
+    def __hash__(self):
+        return hash(self.id)
+
+
 class ClientList:
     def __init__(self):
         self._manager = mp.Manager()
-        self._shared_clients = self._manager.list()
-        self._clients: list[ClientConnection] = []
+        self._shared = self._manager.list()
+        self._private: list[ClientConnection] = []
 
     def append(self, client: ClientConnection):
-        self._clients.append(client)
-        self._shared_clients.append(client.id)
+        self._private.append(client)
+        self._shared.append(MPClientConnection(client))
 
     def remove(self, client: ClientConnection):
-        self._clients.remove(client)
-        self._shared_clients.remove(client.id)
+        self._private.remove(client)
+        self._shared.remove(MPClientConnection(client))
 
     def public_get(self):
-        return [client_id for client_id in self._shared_clients]
+        return list(self._shared)
 
     def __contains__(self, item):
-        return item in self._clients
+        return item in self._private
 
     def __len__(self):
-        return len(self._clients)
+        return len(self._private)
 
     def __iter__(self):
-        return iter(self._clients)
+        return iter(self._private)
 
 
 class TCPServer:
     def __init__(self, host_ip, host_port, ticks_per_second: int = 50):
         self._request_queue = AwaitableQueue(maxsize=10)
-        self._broadcast_queue = AwaitableQueue(maxsize=10)
+        self._broadcast_queue = AwaitableQueue(maxsize=1)
         self._internal_state = mp.Value("i", ServerState.IDLE.value)
 
         self._clients = ClientList()
@@ -165,7 +185,7 @@ class TCPServer:
         except q.Empty:
             return None
 
-    def get_clients(self):
+    def get_clients(self) -> list[MPClientConnection]:
         return self._clients.public_get()
 
     def asyncio_run(self):
@@ -207,6 +227,7 @@ class TCPServer:
         addr = self._server.sockets[0].getsockname()
         print(f"Serving on {addr}")
 
+        asyncio.create_task(self._broadcaster())
         while self.state != ServerState.EXITING:
             await asyncio.sleep(2)
 
@@ -239,8 +260,7 @@ class TCPServer:
                     timeout=2,
                 )
             elif self.state == ServerState.PLAYING:
-                # TODO - Use shared DataStream for player updates
-                pass
+                client_conn.client_data_pipe.write(data.decode())
 
         # Disconnected
         print(f"Client {client_conn.id} disconnected")
@@ -260,10 +280,10 @@ class TCPServer:
                 except CONNECTION_EXCEPTION:
                     break
 
-    async def _broadcaster(self, message):
+    async def _broadcaster(self):
         """This asyncio task runs along the server"""
         while self.state != ServerState.EXITING:
-            message = await self._broadcast_queue.async_get(timeout=0.2)
+            message = await self._broadcast_queue.async_get(timeout=1)
             if message is not None:
                 try:
                     await asyncio.gather(
@@ -309,6 +329,21 @@ class GameServer:
     def start_lobby(self):
         self._network_server.state = ServerState.LOBBY
 
+    def start_playing(self):
+        self.player_pipes = [client.client_data_pipe for client in self._network_server.get_clients()]
+        self._network_server.state = ServerState.PLAYING
+
+    def gather_player_data(self):
+        data = []
+        for pipe in self.player_pipes:
+            player_data = pipe.read()
+            if player_data is not None:
+                data.append(player_data)
+        return data
+
+    def broadcast_message(self, message):
+        self._network_server.broadcast_data(message, timeout=10)
+
     def stop(self):
         self._network_server.state = ServerState.EXITING
         print(f"[{self.__class__.__name__}] Shutting down server...")
@@ -332,11 +367,11 @@ class GameServer:
 
     @property
     def connected_players(self):
-        return self._network_server.get_clients()
+        return set(client.id for client in self._network_server.get_clients())
 
     def _request_processor(self):
         while self._network_server.state != ServerState.EXITING:
-            time.sleep(1)
+            time.sleep(2)
             while self._network_server.state == ServerState.LOBBY:
                 client_request = self._network_server.read_request(timeout=2)
                 if client_request is not None:
@@ -359,12 +394,15 @@ class SnakeServer:
 
         self._decoder = MessageDecoder()
 
-        # TODO - Check for disconnected players
         self._joined_players = set()
 
     def start(self):
         self._server.start()
         self._server.start_lobby()
+
+    def start_playing(self):
+        self._server.start_playing()
+        self._server.broadcast_message(GameReady().model_dump_json())
 
     def stop(self):
         self._server.stop()
@@ -374,7 +412,7 @@ class SnakeServer:
         return self._server.connected_players
 
     def get_joined_players(self):
-        self._joined_players.intersection_update(self._server.connected_players)
+        self._joined_players.intersection_update(self.connected_players)
         return self._joined_players
 
     def request_responder(self, client_id, request: str):
@@ -416,6 +454,31 @@ class SnakeServer:
             print("Message type", type(player_message))
             return ServerResponse(status=1, message="Invalid message").model_dump_json()
 
+    def get_player_updates(self):
+        player_updates: list[PlayerCommand] = []
+        for data in self._server.gather_player_data():
+            player_message = self._decoder.decode_message(data)
+            if isinstance(player_message, PlayerCommand):
+                player_updates.append(player_message)
+        return player_updates
+
+    def send_game_state(self, entities):
+        game_state_message = self._serialize_entities(entities)
+        self._server.broadcast_message(game_state_message)
+
+    def _serialize_entities(self, entities):
+        _server_entities = []
+
+        for entity in entities:
+            if isinstance(entity, Food):
+                _server_entities.append(
+                    EntityMessage(entity_id="food", body=entity.body_component.segments)
+                )
+            elif isinstance(entity, Snake):
+                _server_entities.append(
+                    EntityMessage(entity_id="snake", body=entity.body_component.segments)
+                )
+        return EntitiesMessage(entities=_server_entities).model_dump_json()
 
 def main():
     game_server = SnakeServer("127.0.0.1", GAME_PORT, ticks_per_second=50)

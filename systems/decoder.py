@@ -17,6 +17,7 @@ class MessageDecoder:
         """
         # Check if the input data is a string
         if not isinstance(data, str):
+            print("Input data:", data)
             raise ValueError("Input data must be a string")
 
         # Try parsing the string into a dictionary
@@ -29,6 +30,7 @@ class MessageDecoder:
 
         # Check if parsed_data is a dictionary
         if not isinstance(parsed_data, dict):
+            print("Input data:", parsed_data)
             raise ValueError("Parsed data is not a dictionary")
 
         # Get the message type
@@ -45,6 +47,7 @@ class MessageDecoder:
         try:
             return message_model.model_validate(parsed_data)
         except ValidationError as e:
+            print("Input data:", message_model)
             print("Validation error:", e)
             raise ValueError(f"Validation error for message type '{message_type}': {e}")
 

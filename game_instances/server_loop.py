@@ -4,7 +4,11 @@ import time
 from enum import Enum, auto
 
 import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+
+from entities.entity import Entity
+from schemas.entities import EntityMessage
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
 import pygame
 
 from entities.type import Food, Snake
@@ -14,7 +18,7 @@ from systems.network.constants import GAME_PORT
 from systems.network.server import SnakeServer
 
 
-class ServerGameState(Enum):
+class GameState(Enum):
     IDLE = auto()
     LOBBY = auto()
     PLAYING = auto()
@@ -33,7 +37,7 @@ class ServerLoop:
         # self.rendering_system = RenderSystem(*coordinate_space)
         self._server = SnakeServer(server_ip, GAME_PORT)
 
-        self._state = ServerGameState.IDLE
+        self._state = GameState.IDLE
         self._clock = pygame.time.Clock()
         self._tick_rate = tick_rate
         self._players = []
@@ -46,22 +50,21 @@ class ServerLoop:
         # self.rendering_system.setup()
         self._server.start()
 
-        self._state = ServerGameState.LOBBY
+        self._state = GameState.LOBBY
 
     def close(self):
-        self._state = ServerGameState.EXITING
+        self._state = GameState.EXITING
         self._server.stop()
         pygame.quit()
 
     def run(self):
         self._setup()
         try:
-            while self._state != ServerGameState.EXITING:
-                dt = self._clock.tick(self._tick_rate) / 1000
-                if self._state == ServerGameState.LOBBY:
+            while self._state != GameState.EXITING:
+                if self._state == GameState.LOBBY:
                     self._lobby()
-                elif self._state == ServerGameState.PLAYING:
-                    self._playing(dt)
+                elif self._state == GameState.PLAYING:
+                    self._playing()
         except KeyboardInterrupt:
             pass
         self.close()
@@ -78,22 +81,24 @@ class ServerLoop:
         #   Block connections new connections and start preparing phase
 
         print("Listening for players...")
-        while self._state == ServerGameState.LOBBY:
+        while self._state == GameState.LOBBY:
             # TODO - Wait for a ready message
             # TODO - Limit players
             # TODO - Block new connections after game start
             print("Players in lobby:", self._server.get_joined_players())
 
             # Assuming lobby ends after a certain number of players join
-            if len(self._server.connected_players) >= 2:
+            if len(self._server.connected_players) >= 1:
                 print(f"Game players: {self._server.connected_players}")
                 break
 
-            time.sleep(0.5)
+            time.sleep(2)
         print("Lobby ready. Starting the game...")
-        self._state = ServerGameState.PLAYING
+        time.sleep(2)
+        self._server.start_playing()
+        self._state = GameState.PLAYING
 
-    def _playing(self, dt):
+    def _playing(self):
         # Playing
         #   Send initial game data
         #   Start countdown for game start
@@ -101,20 +106,6 @@ class ServerLoop:
         #   Get players updates
         #   On game end, go back to lobby
         #   Or start a new game automatically
-
-        while True:
-            print("Playing")
-            time.sleep(2)
-
-        def serialize_entities(entities):
-            _server_entities = []
-
-            for entity in entities:
-                if isinstance(entity, Food):
-                    _server_entities.append(
-                        {"type": "food", "position": entity.position}
-                    )
-            return _server_entities
 
         entities = []
         entities.append(
@@ -126,42 +117,31 @@ class ServerLoop:
             )
         )
 
-        # Initialize players snakes
-        for player_name in self._players:
+        for player_name in self._server.get_joined_players():
             snake = Snake(player_name, (6, 0))
             entities.append(snake)
 
-        quit_game = False
-        while self._state == ServerGameState.PLAYING:
-            if quit_game == True:
-                self._state = ServerGameState.EXITING
-                break
-
-            serialized_entities = serialize_entities(entities)
-            self._server.send_all(json.dumps(serialized_entities))
+        acu_dt = 0
+        command_queue = []
+        while self._state == GameState.PLAYING:
+            # Initialize players snakes
+            dt = self._clock.tick(self._tick_rate)
+            acu_dt += dt
+            self._server.send_game_state(entities)
 
             # TODO - Make the systems run for all players commands
-            players_response: dict = self._server.read_all()
-            if players_response:
-                for player, response in players_response.items():
-                    print(f"Player {player} response: {response}")
-                    if response and "snake_direction" in response:
-                        player_command = {
-                            "snake_direction": response["snake_direction"]
-                        }
+            player_response = self._server.get_player_updates()
+            if player_response:
+                for player_command in player_response:
+                    command_queue.append(player_command.command)
+            if acu_dt > 400:
+                if command_queue:
+                    self._movement_system.run(entities, command_queue.pop())
+                else:
+                    self._movement_system.run(entities, None)
+                acu_dt = 0
 
-                        self._movement_system.run(
-                            entities, player_command
-                        )  # Server side
-
-            entities = self._game_logic_system.run(entities)  # Server side
-
-            # self.rendering_system.run(entities)
-
-            self._clock.tick(10)
-
-        # Game goes back to lobby
-        self._state = ServerGameState.LOBBY
+            entities = self._game_logic_system.run(entities)
 
 
 if __name__ == "__main__":

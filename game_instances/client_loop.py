@@ -6,7 +6,8 @@ import traceback as tb
 
 import os
 
-from utils.timer import Timer
+from schemas.entities import EntityMessage
+from utils.timer import Timer, print_func_time
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 import pygame
 
@@ -50,7 +51,6 @@ class ClientLoop:
         self._setup()
         try:
             while self.state != ClientGameState.EXITING:
-                dt = self._clock.tick(self._tick_rate) / 1000
                 if self.state == ClientGameState.IDLE:
                     self._idle()
                 elif self.state == ClientGameState.CONNECTING:
@@ -58,6 +58,7 @@ class ClientLoop:
                 elif self.state == ClientGameState.LOBBY:
                     self._lobby()
                 elif self.state == ClientGameState.PLAYING:
+                    dt = self._clock.tick(self._tick_rate) / 1000
                     self._playing(dt)
                 elif self.state == ClientGameState.DISCONNECTING:
                     self._disconnecting()
@@ -80,11 +81,6 @@ class ClientLoop:
 
     def _idle(self):
         # TODO - Main menu UI
-        # time.sleep(1)
-        command, quit_game = self.input_system.run()
-        if quit_game:
-            self.state = ClientGameState.EXITING
-        self.rendering_system.run([Food((6, 0))])
         self.state = ClientGameState.CONNECTING
 
     def _connecting(self):
@@ -120,22 +116,21 @@ class ClientLoop:
         lobby_info = None
         sleep_time = 0.5
         print("--At lobby")
+        while lobby_info is None:
+            timer = Timer()
+            lobby_info = self.client.get_lobby_info()
+            print("Lobby info:", lobby_info)
+            time.sleep(max(0, sleep_time - timer.elapsed_sec()))
+            if lobby_info is not None:
+                break
+            print("Waiting for lobby info...")
         while True:
-            # while lobby_info is None:
-                timer = Timer()
-                lobby_info = self.client.get_lobby_info()
-                print("Lobby info:", lobby_info)
-                time.sleep(max(0, sleep_time - timer.elapsed_sec()))
-                # if lobby_info is not None:
-                #     break
-                # print("Waiting for lobby info...")
-            # else:
-            #     print("Got lobby info!")
-            #     print(lobby_info)
-            #     break
-        
-        # print("Lobby ready. Starting the game...")
-        # self.game_state = GameState.PLAYING
+            if self.client.wait_game_start():
+                break
+            print("Waiting for game start...")
+
+        print("Lobby ready. Starting the game...")
+        self.state = ClientGameState.PLAYING
 
     def _playing(self, dt):
         # Playing:
@@ -144,34 +139,35 @@ class ClientLoop:
         #   Get player input, if any
         #   Send player command
 
-        entities = []
-        snake = Snake("ducks_gonna_fly", (6, 0))
-        snake.movement_component.speed = 1
-        entities.append(snake)
-        entities.append(
-            Food(
-                (
-                    random.randint(0, self.columns - 1),
-                    random.randint(0, self.rows - 1),
-                )
-            )
-        )
+        def deserialize_entities(entities: list[EntityMessage]):
+            deserialized_entities = []
+            for entity in entities:
+                if entity.entity_id == "snake":
+                    snake = Snake("ducks_gonna_fly", (0, 0))
+                    snake.body_component.segments = entity.body
+                    deserialized_entities.append(snake)
+                elif entity.entity_id == "food":
+                    food = Food((0, 0))
+                    food.body_component.segments = entity.body
+                    deserialized_entities.append(food)
+            return deserialized_entities
 
-        while self.state != ClientGameState.EXITING:
-            # TODO - Make input specific for the player's snake
-            player_command, quit_game = self.input_system.run()  # Client side
+        # TODO - Make input specific for the player's snake
+        player_command, quit_game = self.input_system.run()  # Client side
 
-            if quit_game == True:  # Client side
-                # TODO - Disconnect from server
-                self.client.disconnect()
-                self.state = ClientGameState.EXITING
-                break
+        if quit_game == True:  # Client side
+            self.client.disconnect_from_server()
+            self.state = ClientGameState.EXITING
+            return
 
-            self.client.send_message(json.dumps(player_command))
+        if player_command is not None:
+            self.client.send_player_command(player_command)
 
+        entities = self.client.get_server_update()
+        if entities is not None:
+            entities = deserialize_entities(entities)
 
             self.rendering_system.run(entities)  # Client side
-        self._close()
 
     def _disconnecting(self):
         pass

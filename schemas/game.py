@@ -6,6 +6,10 @@ from constants.message_types import MessageTypes
 from schemas.response import ServerResponse
 
 
+class GameReady(BaseModel):
+    type: str = MessageTypes.GAME_READY.value
+
+
 class Position(BaseModel):
     x: float
     y: float
@@ -18,7 +22,7 @@ class PlayerUpdate(BaseModel):
 
 class PlayerCommand(BaseModel):
     type: str = MessageTypes.PLAYER_COMMAND.value
-    command: str
+    command: dict
 
 
 class ServerUpdate(ServerResponse):

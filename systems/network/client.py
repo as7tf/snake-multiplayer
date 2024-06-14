@@ -13,6 +13,8 @@ from schemas import (
     LobbyInfoResponse,
     ServerResponse,
 )
+from schemas.entities import EntitiesMessage, EntityMessage
+from schemas.game import GameReady, PlayerCommand
 from systems.decoder import MessageDecoder
 from systems.network.constants import GAME_PORT, CONNECTION_EXCEPTION
 from systems.network.data_stream import DataStream
@@ -147,8 +149,6 @@ class _NetworkClient:
         while self.state != ClientState.EXITING:
             await asyncio.sleep(self._throttle)
             while self.is_running():
-                start_time = asyncio.get_event_loop().time()
-
                 server_data = None
                 try:
                     # TODO - Add a patience to server data age
@@ -161,24 +161,19 @@ class _NetworkClient:
                             self._tcp_conn.receive_message(message_length), None
                         )
 
-                        server_data = server_data.decode("utf-8")
+                        server_data = server_data.decode()
                         self._response_stream.write(server_data)
                 except CONNECTION_EXCEPTION:
                     print("Connection lost")
                     self.state = ClientState.IDLE
 
-                elapsed_time = asyncio.get_event_loop().time() - start_time
-                sleep_time = max(0, self._throttle - elapsed_time)
-                await asyncio.sleep(sleep_time)
-
     async def _send_data(self):
         while self.state != ClientState.EXITING:
             await asyncio.sleep(self._throttle)
             while self.is_running():
-                start_time = asyncio.get_event_loop().time()
 
                 try:
-                    data: str = self._message_stream.read()
+                    data = await self._loop.run_in_executor(None, self._message_stream.read, 1)
                     if data is not None:
                         data = data.encode("utf-8")
 
@@ -190,10 +185,6 @@ class _NetworkClient:
                         await asyncio.wait_for(self._tcp_conn.send_message(data), None)
                 except CONNECTION_EXCEPTION:
                     pass
-
-                elapsed_time = asyncio.get_event_loop().time() - start_time
-                sleep_time = max(0, self._throttle - elapsed_time)
-                await asyncio.sleep(sleep_time)
 
 
 class GameClient:
@@ -291,10 +282,12 @@ class SnakeClient:
             print("Server disconnected")
             self.disconnect_from_server()
             return None
+        elif server_message is None:
+            return None
         else:
-            return server_message
+            return self._decoder.decode_message(server_message)
 
-    def _send_client_message(self, message: BaseModel, timeout: float = 0) -> bool:
+    def _send_client_message(self, message: BaseModel, timeout: float = 0) -> None:
         # NOTE - This is the only method to send data to the server
         # Possible outcomes:
         #    1. Data sent
@@ -309,7 +302,6 @@ class SnakeClient:
         response = self._get_server_message(timeout)
 
         if response is not None:
-            response = self._decoder.decode_message(response)
             if not isinstance(response, response_schema):
                 print(f"Unexpected server message: {response}")
                 return None
@@ -318,7 +310,7 @@ class SnakeClient:
         return response
 
     # Game connection
-    def disconnect_from_server(self) -> bool:
+    def disconnect_from_server(self) -> None:
         if self._client:
             self._client.disconnect()
             timer = Timer()
@@ -370,15 +362,28 @@ class SnakeClient:
     def set_ready(self, ready: bool) -> bool:
         pass
 
-    def wait_game_start(self) -> dict:
-        pass
+    def wait_game_start(self) -> bool:
+        server_message = self._get_server_message(timeout=2)
+        if isinstance(server_message, GameReady):
+            return True
+        return False
 
     # Play loop
-    def get_server_update(self) -> dict:
-        pass
+    def get_server_update(self) -> list[EntityMessage]:
+        server_message = self._get_server_message(timeout=0.1)
+        if isinstance(server_message, EntitiesMessage):
+            return server_message.entities
+        return None
 
-    def send_player_command(self) -> bool:
-        pass
+    def send_player_command(self, command: dict) -> None:
+        self._send_client_message(PlayerCommand(command=command))
+
+    def _deserialize_entities(self, entities_message: EntitiesMessage) -> list:
+        # TODO - Deserialize entities
+        deserialized_entities = []
+        for entity in entities_message.entities:
+            deserialized_entities.append(entity)
+        return deserialized_entities
 
 
 def main():
