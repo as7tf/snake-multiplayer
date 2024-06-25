@@ -1,4 +1,4 @@
-from game_instances.game_loop import GameLoop
+from game_instances.local_loop import LocalLoop
 
 
 if "__main__" == __name__:
@@ -6,5 +6,5 @@ if "__main__" == __name__:
     columns = 10
     cell_size = 20
 
-    game_loop = GameLoop(rows, columns, cell_size)
+    game_loop = LocalLoop(rows, columns, cell_size)
     game_loop.run()

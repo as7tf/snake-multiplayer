@@ -1,5 +1,6 @@
-import random
 import pygame
+import random
+from enum import Enum, auto
 
 from entities.type import Food, Snake
 
@@ -9,11 +10,12 @@ from systems.player_input import InputSystem
 from systems.render import RenderSystem
 
 
-class GameLoop:
-    def __init__(self, rows, columns, cell_size):
+class LocalLoop:
+    def __init__(self, rows, columns, cell_size, tick_rate=60):
         self.rows = rows
         self.columns = columns
         self.cell_size = cell_size
+        self.tick_rate = tick_rate
 
         coordinate_space = (self.rows, self.columns, self.cell_size)
         self.game_logic_system = GameLogicSystem(*coordinate_space)
@@ -31,7 +33,11 @@ class GameLoop:
         self.game_logic_system.setup()
         self.rendering_system.setup()
 
+        self._clock = pygame.time.Clock()
         self._running = True
+
+    def close(self):
+        pygame.quit()
 
     def run(self):
         self.setup()
@@ -51,33 +57,18 @@ class GameLoop:
 
         while self._running:
             # TODO - Make input specific for the player's snake
-            player_command, quit_game = self.input_system.run()  # Client side
+            player_command, quit_game = self.input_system.run()
 
-            if quit_game == True:  # Client side
+            if quit_game == True:
                 self._running = False
                 break
 
-            # TODO - Add network layer for client-server communication
-            # TODO - Create different game instances for the server and the client
+            self.movement_system.run(entities, player_command)
 
-            self.movement_system.run(entities, player_command)  # Server side
+            entities = self.game_logic_system.run(entities)
 
-            entities = self.game_logic_system.run(entities)  # Server side
+            self.rendering_system.run(entities)
 
-            self.render(entities)  # Client side
+            self._clock.tick(self.tick_rate)
+            
         self.close()
-
-    def render(self, entities):
-        self.rendering_system.run(entities)
-
-    def close(self):
-        pygame.quit()
-
-
-if "__main__" == __name__:
-    rows = 10
-    columns = 10
-    cell_size = 20
-
-    game_loop = GameLoop(rows, columns, cell_size)
-    game_loop.run()

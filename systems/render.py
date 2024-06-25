@@ -1,6 +1,6 @@
 import pygame
 
-from entities.entity import Entity
+from entities.base import Entity
 
 from systems.system import System
 
@@ -10,13 +10,14 @@ class RenderSystem(System):
         self.cell_size = cell_size
 
         # Set the screen size
-        screen_width = self.cell_size * rows
-        screen_height = self.cell_size * columns
+        screen_width = self.cell_size * columns
+        screen_height = self.cell_size * rows
         self.window = pygame.display.set_mode((screen_width, screen_height))
         pygame.display.set_caption("Snake Game")
 
     def setup(self):
-        pass
+        self.window.fill((255, 255, 255))
+        pygame.display.flip()
 
     def run(self, entities: list[Entity]):
         self.window.fill((255, 255, 255))
@@ -36,4 +37,3 @@ class RenderSystem(System):
                 )
         
         pygame.display.flip()
-        pygame.time.Clock().tick(6)

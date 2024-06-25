@@ -9,6 +9,7 @@ class SnakeMovement(MovementComponent):
         super().__init__()
         self.snake_body = snake_body
         self.direction = direction
+        self.speed = 1
 
     def move(self, command):
         direction = None
@@ -36,7 +37,6 @@ class SnakeMovement(MovementComponent):
         while not np.array_equal(new_segment, new_head):
             new_segment = np.add(new_segment, direction)
             self.snake_body.segments.insert(0, tuple(new_segment))
-
 
     def _move_tail(self):
         # Remove last body segment if body is greater than current snake size
