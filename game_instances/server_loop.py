@@ -1,22 +1,17 @@
-import json
+import os
 import queue
 import random
 import time
 from enum import Enum, auto
 
-import os
-
-from entities.base import Entity
-from schemas.entities import EntityMessage
-
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
-import pygame
-
 from entities.type import Food, Snake
 from systems.game_logic import GameLogicSystem
 from systems.movement import MovementSystem
 from systems.network.constants import GAME_PORT
-from systems.network.server import SnakeServer
+from systems.network.snake_server import SnakeServer
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
+import pygame  # noqa: E402
 
 
 class GameState(Enum):

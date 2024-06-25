@@ -1,23 +1,20 @@
-from enum import Enum, auto
 import hashlib
-import json
+import os
 import random
 import time
-import traceback as tb
-
-import os
+from enum import Enum, auto
 
 from schemas.entities import EntityMessage
-from utils.timer import Timer, print_func_time
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-import pygame
+from utils.timer import Timer
 
 from entities.type import Food, Snake
-
-from systems.network.client import SnakeClient
 from systems.network.constants import GAME_PORT
+from systems.network.snake_client import SnakeClient
 from systems.player_input import InputSystem
 from systems.render import RenderSystem
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
+import pygame  # noqa: E402
 
 
 class ClientGameState(Enum):
@@ -91,7 +88,7 @@ class ClientLoop:
         #   Connect to server
         #   Send player name
         #   Continue to lobby if server approved
-        
+
         print("--Connecting to server...")
         connected = self.client.connect_to_server("localhost", GAME_PORT)
         if not connected:
@@ -159,7 +156,7 @@ class ClientLoop:
         # TODO - Make input specific for the player's snake
         player_command, quit_game = self.input_system.run()  # Client side
 
-        if quit_game == True:  # Client side
+        if quit_game:  # Client side
             self.client.disconnect_from_server()
             self.state = ClientGameState.EXITING
             return
