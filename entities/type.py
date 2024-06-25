@@ -1,4 +1,4 @@
-from entities.entity import Entity
+from entities.base import Entity
 
 from components.body.component import BodyComponent
 from components.body.snake import SnakeBody

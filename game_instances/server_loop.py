@@ -1,11 +1,12 @@
 import json
+import queue
 import random
 import time
 from enum import Enum, auto
 
 import os
 
-from entities.entity import Entity
+from entities.base import Entity
 from schemas.entities import EntityMessage
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
@@ -88,7 +89,7 @@ class ServerLoop:
             print("Players in lobby:", self._server.get_joined_players())
 
             # Assuming lobby ends after a certain number of players join
-            if len(self._server.connected_players) >= 1:
+            if len(self._server.connected_players) >= 2:
                 print(f"Game players: {self._server.connected_players}")
                 break
 
@@ -117,12 +118,18 @@ class ServerLoop:
             )
         )
 
-        for player_name in self._server.get_joined_players():
-            snake = Snake(player_name, (6, 0))
+        for player_index, player_name in enumerate(self._server.get_joined_players()):
+            player_color = [0, 0, 0]
+            player_color[player_index % 3] = 255
+            snake = Snake(
+                player_name,
+                start_position=(6, 0 + 2 * player_index),
+                color=player_color,
+            )
             entities.append(snake)
 
         acu_dt = 0
-        command_queue = []
+        players_updates = queue.Queue(maxsize=2)
         while self._state == GameState.PLAYING:
             # Initialize players snakes
             dt = self._clock.tick(self._tick_rate)
@@ -130,13 +137,14 @@ class ServerLoop:
             self._server.send_game_state(entities)
 
             # TODO - Make the systems run for all players commands
-            player_response = self._server.get_player_updates()
-            if player_response:
-                for player_command in player_response:
-                    command_queue.append(player_command.command)
-            if acu_dt > 400:
-                if command_queue:
-                    self._movement_system.run(entities, command_queue.pop())
+            updates = self._server.get_players_updates()
+            if updates:
+                if not players_updates.full():
+                    players_updates.put(updates)
+
+            if acu_dt > 200:
+                if not players_updates.empty():
+                    self._movement_system.run(entities, players_updates.get())
                 else:
                     self._movement_system.run(entities, None)
                 acu_dt = 0

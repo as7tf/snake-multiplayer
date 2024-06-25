@@ -331,7 +331,7 @@ class SnakeClient:
 
     def try_lobby_join(self, player_name: str) -> bool:
         join_request = JoinLobbyRequest(player_name=player_name)
-        response = self._request(join_request, ServerResponse, timeout=0.5)
+        response = self._request(join_request, ServerResponse, timeout=1)
 
         if response is None:
             return False
@@ -375,8 +375,8 @@ class SnakeClient:
             return server_message.entities
         return None
 
-    def send_player_command(self, command: dict) -> None:
-        self._send_client_message(PlayerCommand(command=command))
+    def send_player_command(self, player_name, command: dict) -> None:
+        self._send_client_message(PlayerCommand(player_name=player_name, command=command))
 
     def _deserialize_entities(self, entities_message: EntitiesMessage) -> list:
         # TODO - Deserialize entities

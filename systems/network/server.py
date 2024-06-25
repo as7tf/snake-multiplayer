@@ -49,7 +49,9 @@ class AwaitableQueue:
     # @print_async_func_time
     async def async_get(self, timeout=None):
         try:
-            return await self._loop.run_in_executor(None, self._queue.get, True, timeout)
+            return await self._loop.run_in_executor(
+                None, self._queue.get, True, timeout
+            )
         except q.Empty:
             return None
 
@@ -325,12 +327,13 @@ class GameServer:
         self._responder_thread = th.Thread(target=self._request_processor)
         self._responder_thread.start()
 
-    # TODO - Create a method to handle player updates concurrently
     def start_lobby(self):
         self._network_server.state = ServerState.LOBBY
 
     def start_playing(self):
-        self.player_pipes = [client.client_data_pipe for client in self._network_server.get_clients()]
+        self.player_pipes = [
+            client.client_data_pipe for client in self._network_server.get_clients()
+        ]
         self._network_server.state = ServerState.PLAYING
 
     def gather_player_data(self):
@@ -342,7 +345,10 @@ class GameServer:
         return data
 
     def broadcast_message(self, message):
-        self._network_server.broadcast_data(message, timeout=10)
+        try:
+            self._network_server.broadcast_data(message, timeout=10)
+        except q.Full:
+            print(f"[{self.__class__.__name__}] Broadcast queue full!")
 
     def stop(self):
         self._network_server.state = ServerState.EXITING
@@ -395,6 +401,7 @@ class SnakeServer:
         self._decoder = MessageDecoder()
 
         self._joined_players = set()
+        self._player_names = {}
 
     def start(self):
         self._server.start()
@@ -413,7 +420,12 @@ class SnakeServer:
 
     def get_joined_players(self):
         self._joined_players.intersection_update(self.connected_players)
-        return self._joined_players
+        player_ids = list(filter( lambda x: x in self._joined_players, list(self._player_names.keys())))
+        player_names = list(map(lambda x: self._player_names[x], player_ids))
+        for player_id, player_name in zip(player_ids, player_names):
+            print(f"Player {player_id} is {player_name}")
+
+        return player_names
 
     def request_responder(self, client_id, request: str):
         player_message = self._decoder.decode_message(request)
@@ -422,6 +434,7 @@ class SnakeServer:
             print("Player joining lobby:", client_id)
             message = ServerResponse(status=0, message="Joined lobby").model_dump_json()
             self._joined_players.add(client_id)
+            self._player_names[client_id] = player_message.player_name
             return message
         elif isinstance(player_message, LobbyInfoRequest):
             print("Sending lobby info to", client_id)
@@ -454,7 +467,7 @@ class SnakeServer:
             print("Message type", type(player_message))
             return ServerResponse(status=1, message="Invalid message").model_dump_json()
 
-    def get_player_updates(self):
+    def get_players_updates(self):
         player_updates: list[PlayerCommand] = []
         for data in self._server.gather_player_data():
             player_message = self._decoder.decode_message(data)
@@ -472,13 +485,22 @@ class SnakeServer:
         for entity in entities:
             if isinstance(entity, Food):
                 _server_entities.append(
-                    EntityMessage(entity_id="food", body=entity.body_component.segments)
+                    EntityMessage(
+                        entity_id="food",
+                        body=entity.body_component.segments,
+                        color=entity.color,
+                    )
                 )
             elif isinstance(entity, Snake):
                 _server_entities.append(
-                    EntityMessage(entity_id="snake", body=entity.body_component.segments)
+                    EntityMessage(
+                        entity_id="snake",
+                        body=entity.body_component.segments,
+                        color=entity.color,
+                    )
                 )
         return EntitiesMessage(entities=_server_entities).model_dump_json()
+
 
 def main():
     game_server = SnakeServer("127.0.0.1", GAME_PORT, ticks_per_second=50)
@@ -487,7 +509,6 @@ def main():
 
     server_throttle = 0.01
     try:
-        # TODO - Add a separator between messages
         while True:
             time.sleep(server_throttle)
             timer.reset()

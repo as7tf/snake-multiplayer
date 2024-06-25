@@ -1,6 +1,6 @@
 import pygame
 
-from entities.entity import Entity
+from entities.base import Entity
 
 from systems.system import System
 

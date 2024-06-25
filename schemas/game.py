@@ -22,6 +22,7 @@ class PlayerUpdate(BaseModel):
 
 class PlayerCommand(BaseModel):
     type: str = MessageTypes.PLAYER_COMMAND.value
+    player_name: str
     command: dict
 
 

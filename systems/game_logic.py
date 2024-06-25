@@ -1,6 +1,6 @@
 import random
 
-from entities.entity import Entity
+from entities.base import Entity
 from entities.type import Food, Snake
 
 from systems.system import System
@@ -29,11 +29,13 @@ class GameLogicSystem(System):
 
         for snake_1 in snakes:
             for snake_2 in snakes:
-                # Checking snake collision with own tail
+                # Checking snake collision
                 if snake_1 == snake_2:
-                    tail_1 = snake_1.body_component.tail
-                    if snake_1.body_component.head in tail_1:
-                        entities.remove(snake_1)
+                    body_2 = snake_2.body_component.tail
+                else:
+                    body_2 = snake_2.body_component.segments
+                if snake_1.body_component.head in body_2:
+                    entities.remove(snake_1)
 
                 # TODO - Check collision between different snakes
 

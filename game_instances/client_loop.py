@@ -1,4 +1,5 @@
 from enum import Enum, auto
+import hashlib
 import json
 import random
 import time
@@ -72,6 +73,8 @@ class ClientLoop:
 
         self.input_system.setup()
         self.rendering_system.setup()
+        player_code = str(random.randint(0, 10000))
+        self.player_name = hashlib.sha256(player_code.encode()).hexdigest()[0:6]
 
         self.state = ClientGameState.IDLE
         self._running = True
@@ -97,7 +100,7 @@ class ClientLoop:
             return
 
         while True:
-            lobby_joined = self.client.try_lobby_join("ducksgonnafly")
+            lobby_joined = self.client.try_lobby_join(self.player_name)
             if lobby_joined:
                 break
             else:
@@ -145,6 +148,7 @@ class ClientLoop:
                 if entity.entity_id == "snake":
                     snake = Snake("ducks_gonna_fly", (0, 0))
                     snake.body_component.segments = entity.body
+                    snake.color = entity.color
                     deserialized_entities.append(snake)
                 elif entity.entity_id == "food":
                     food = Food((0, 0))
@@ -161,7 +165,7 @@ class ClientLoop:
             return
 
         if player_command is not None:
-            self.client.send_player_command(player_command)
+            self.client.send_player_command(self.player_name, player_command)
 
         entities = self.client.get_server_update()
         if entities is not None:
