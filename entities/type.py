@@ -1,8 +1,7 @@
-from entities.base import Entity
-
 from components.body.component import BodyComponent
 from components.body.snake import SnakeBody
 from components.movement.snake import SnakeMovement
+from entities.base import Entity
 
 
 # Define the player snake

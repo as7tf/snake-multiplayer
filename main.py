@@ -6,5 +6,5 @@ if "__main__" == __name__:
     columns = 10
     cell_size = 20
 
-    game_loop = LocalLoop(rows, columns, cell_size)
+    game_loop = LocalLoop(rows, columns, cell_size, tick_rate=10)
     game_loop.run()

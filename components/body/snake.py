@@ -2,11 +2,12 @@ from components.body.component import BodyComponent
 
 
 class SnakeBody(BodyComponent):
-    def __init__(self, position: tuple[int, int], size):
+    def __init__(self, position: tuple[int, int] = [0, 0], size=5):
         super().__init__(starting_position=position)
 
         self.size = size
 
+        # TODO - Customize body creation
         for i in range(1, self.size):
             self.segments.append((position[0] - i, position[1]))
 

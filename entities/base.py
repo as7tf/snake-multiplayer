@@ -1,6 +1,4 @@
 from entities.entity_id import EntityID
-from components.body.component import BodyComponent
-from components.movement.component import MovementComponent
 
 
 class Entity:
@@ -21,20 +19,31 @@ class Entity:
 
 
 class EntityBetter:
-    def __init__(self, entity_id, entity_hash):
+    def __init__(self, entity_id: EntityID, entity_hash: str):
         self.id = entity_id
         self.hash = entity_hash
         self._components = {}
 
-    def add_component(self, component):
-        component_type = type(component)
+    def add_component(self, component_type):
         if component_type in self._components:
             raise ValueError(
-                f"Component already exists for this entity."
-                + f"Entity hash: '{self.hash}',"
-                + f"Component type: '{component_type.__name__}'"
+                "Component already exists for this entity.\n"
+                + f"  Entity id: '{self.id}',\n"
+                + f"  Entity hash: '{self.hash}',\n"
+                + f"  Component type: '{component_type.__name__}'"
             )
-        self._components[type(component)] = component
+        self._components[component_type] = component_type()
+
+    def set_component(self, component):
+        component_type = type(component)
+        if component_type not in self._components:
+            raise ValueError(
+                "Component does not exist for this entity.\n"
+                + f"  Entity id: '{self.id}',\n"
+                + f"  Entity hash: '{self.hash}',\n"
+                + f"  Component type: '{component_type.__name__}'"
+            )
+        self._components[component_type] = component
 
     def get_component(self, component_type):
         return self._components.get(component_type)

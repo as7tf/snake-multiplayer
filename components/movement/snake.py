@@ -5,7 +5,7 @@ from components.movement.component import MovementComponent
 
 
 class SnakeMovement(MovementComponent):
-    def __init__(self, snake_body: SnakeBody, direction):
+    def __init__(self, snake_body: SnakeBody=SnakeBody(), direction="LEFT"):
         super().__init__()
         self.snake_body = snake_body
         self.direction = direction

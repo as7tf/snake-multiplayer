@@ -1,9 +1,15 @@
-import pygame
 import random
-from enum import Enum, auto
 
-from entities.type import Food, Snake
+import pygame
 
+from components.body.component import BodyComponent
+from components.body.snake import SnakeBody
+from components.color import ColorComponent
+from components.movement.snake import SnakeMovement
+from components.player import PlayerComponent
+from entities.entity_id import EntityID
+from entities.factory import EntityFactory
+from schemas.game import PlayerCommand
 from systems.game_logic import GameLogicSystem
 from systems.movement import MovementSystem
 from systems.player_input import InputSystem
@@ -23,6 +29,8 @@ class LocalLoop:
         self.movement_system = MovementSystem()
         self.input_system = InputSystem()
 
+        self.entity_factory = EntityFactory()
+
         # TODO - Add UI system and execute after render system
 
     def setup(self):
@@ -36,39 +44,52 @@ class LocalLoop:
         self._clock = pygame.time.Clock()
         self._running = True
 
-    def close(self):
-        pygame.quit()
+    def setup_entities(self):
+        snake = self.entity_factory.create_entity(EntityID.SNAKE)
+        snake.set_component(PlayerComponent(player_name="ducks_gonna_fly"))
+        snake.set_component(SnakeBody((6, 0), 3))
+        snake.set_component(ColorComponent((0, 255, 0)))
+        snake.set_component(SnakeMovement(snake.get_component(SnakeBody)))
 
-    def run(self):
-        self.setup()
-
-        entities = []
-        snake = Snake("ducks_gonna_fly", (6, 0))
-        snake.movement_component.speed = 1
-        entities.append(snake)
-        entities.append(
-            Food(
+        food = self.entity_factory.create_entity(EntityID.FOOD)
+        food.set_component(
+            BodyComponent(
                 (
                     random.randint(0, self.columns - 1),
                     random.randint(0, self.rows - 1),
                 )
             )
         )
+        food.set_component(ColorComponent((255, 0, 0)))
+
+        return [snake, food]
+
+    def close(self):
+        pygame.quit()
+
+    def run(self):
+        self.setup()
+
+        entities = self.setup_entities()
 
         while self._running:
             # TODO - Make input specific for the player's snake
             player_command, quit_game = self.input_system.run()
+            if player_command:
+                player_command = [PlayerCommand(player_name="ducks_gonna_fly", command=player_command)]
+            else:
+                player_command = None
 
-            if quit_game == True:
+            if quit_game:
                 self._running = False
                 break
-
+            
             self.movement_system.run(entities, player_command)
 
-            entities = self.game_logic_system.run(entities)
+            self.game_logic_system.run(entities)
 
             self.rendering_system.run(entities)
 
             self._clock.tick(self.tick_rate)
-            
+
         self.close()

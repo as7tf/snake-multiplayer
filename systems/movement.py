@@ -1,4 +1,7 @@
-from entities.base import Entity
+from components.movement.component import MovementComponent
+from components.movement.snake import SnakeMovement
+from components.player import PlayerComponent
+from entities.base import EntityBetter
 
 from schemas.game import PlayerCommand
 from systems.system import System
@@ -8,22 +11,27 @@ class MovementSystem(System):
     def setup(self):
         pass
 
-    def run(self, entities: list[Entity], move_commands: list[PlayerCommand]):
+    def run(self, entities: list[EntityBetter], move_commands: list[PlayerCommand]):
         if not move_commands:
             for entity in entities:
-                if entity.movement_component is not None:
-                    entity.movement_component.move(None)
+                # mc = entity.get_component(MovementComponent)
+                mc = entity.get_component(SnakeMovement)
+                if mc is not None:
+                    mc.move(None)
             return
 
         commanded_players = [command.player_name for command in move_commands]
         for entity in entities:
-            if entity.movement_component is not None:
-                if entity._entity_id in commanded_players:
+            # mc = entity.get_component(MovementComponent)
+            mc = entity.get_component(SnakeMovement)
+            if mc is not None:
+                pc = entity.get_component(PlayerComponent)
+                if pc is not None and pc.name in commanded_players:
                     player_command = next(
                         command
                         for command in move_commands
-                        if command.player_name == entity._entity_id
+                        if command.player_name == pc.name
                     )
-                    entity.movement_component.move(player_command.command)
+                    mc.move(player_command.command)
                 else:
-                    entity.movement_component.move(None)
+                    mc.move(None)
