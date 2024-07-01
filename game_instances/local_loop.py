@@ -9,7 +9,7 @@ from components.movement.snake import SnakeMovement
 from components.player import PlayerComponent
 from entities.entity_id import EntityID
 from entities.factory import EntityFactory
-from schemas.game import PlayerCommand
+from systems.ecs import ECS
 from systems.game_logic import GameLogicSystem
 from systems.movement import MovementSystem
 from systems.player_input import InputSystem
@@ -26,8 +26,8 @@ class LocalLoop:
         coordinate_space = (self.rows, self.columns, self.cell_size)
         self.game_logic_system = GameLogicSystem(*coordinate_space)
         self.rendering_system = RenderSystem(*coordinate_space)
-        self.movement_system = MovementSystem()
         self.input_system = InputSystem()
+        self.movement_system = MovementSystem(self.input_system.input_queue)
 
         self.entity_factory = EntityFactory()
 
@@ -72,23 +72,21 @@ class LocalLoop:
 
         entities = self.setup_entities()
 
-        while self._running:
-            # TODO - Make input specific for the player's snake
-            player_command, quit_game = self.input_system.run()
-            if player_command:
-                player_command = [PlayerCommand(player_name="ducks_gonna_fly", command=player_command)]
-            else:
-                player_command = None
+        ecs = ECS()
+        ecs.add_system(self.input_system)
+        ecs.add_system(self.movement_system)
+        ecs.add_system(self.game_logic_system)
+        ecs.add_system(self.rendering_system)
 
-            if quit_game:
+        for entity in entities:
+            ecs.add_entity(entity)
+
+        while self._running:
+            ecs.update()
+
+            if not self.input_system.command_queue.empty():
                 self._running = False
                 break
-            
-            self.movement_system.run(entities, player_command)
-
-            self.game_logic_system.run(entities)
-
-            self.rendering_system.run(entities)
 
             self._clock.tick(self.tick_rate)
 

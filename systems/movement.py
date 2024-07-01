@@ -1,17 +1,24 @@
-from components.movement.component import MovementComponent
+from queue import Queue
+
 from components.movement.snake import SnakeMovement
 from components.player import PlayerComponent
 from entities.base import EntityBetter
-
 from schemas.game import PlayerCommand
 from systems.system import System
 
 
 class MovementSystem(System):
+    def __init__(self, input_queue: Queue):
+        self.input_queue = input_queue
+
     def setup(self):
         pass
 
-    def run(self, entities: list[EntityBetter], move_commands: list[PlayerCommand]):
+    def run(self, entities: list[EntityBetter]):
+        move_commands: list[PlayerCommand] = []
+        if not self.input_queue.empty():
+            move_commands = self.input_queue.get_nowait()
+
         if not move_commands:
             for entity in entities:
                 # mc = entity.get_component(MovementComponent)
